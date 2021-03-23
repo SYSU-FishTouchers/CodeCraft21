@@ -348,7 +348,8 @@ class Monitor:
         :return:
         """
 
-        pass
+        # 不迁移机器（迁移 0 台机器）
+        react(f'(migration, 0)')
 
     def power_off_physical_machine(self):
         """
