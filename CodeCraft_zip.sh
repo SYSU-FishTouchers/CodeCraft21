@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT=$(readlink -f "$0")
+SCRIPT=$(readlink "$0")
 BASEDIR=$(dirname "$SCRIPT")
 cd "$BASEDIR" || exit
 
@@ -12,4 +12,4 @@ then
 fi
 
 rm -f CodeCraft-2021.zip
-zip -r CodeCraft-2021.zip ./*
+zip -r CodeCraft-2021.zip ./CodeCraft-2021/*
