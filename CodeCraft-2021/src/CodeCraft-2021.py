@@ -3,15 +3,32 @@ import numpy as np
 import os
 import sys
 import re
-from collections import OrderedDict
+from glob import glob
 
-DEBUG = False
+DEBUG = True
 
 
-def debug(info: str = '', linesep=os.linesep):
-    info += linesep
-    sys.stderr.write(info)
-    sys.stderr.flush()
+def debug(info='', linesep=os.linesep):
+    if not DEBUG:
+        return
+
+    if isinstance(info, str):
+        line = info
+
+        # 对非空输出行加前缀
+        if line != '': line = '[Debug] ' + line
+
+        line += linesep
+        sys.stderr.write(line)
+        sys.stderr.flush()
+
+    elif isinstance(info, dict):
+        for k, v in info.items():
+            line = '[Debug] '
+            line += f'{k}: {v}'
+            line += linesep
+            sys.stderr.write(line)
+            sys.stderr.flush()
 
 
 def react(info: str, linesep=os.linesep):
@@ -64,7 +81,11 @@ class Numa:
 
     def try_allocate(self, cpu, ram):
         if self.cpu.free >= cpu and self.ram.free >= ram:
+            # 分配后，空余容量要减少
+            self.cpu.free -= cpu
+            self.ram.free -= ram
             return True
+
         return False
 
 
@@ -281,9 +302,8 @@ class Monitor:
         """
 
         # 找到虚拟机节点所在的物理机
-        print(self.virtual_physical_mapping)
-        j = self.virtual_physical_mapping[idx]
-        pm = self.running_physical_machines[j]
+        i = self.virtual_physical_mapping[idx]
+        pm = self.running_physical_machines[i]
         # 删除虚拟机节点
         pm.del_virtual_node(idx)
         # 删除记录
@@ -332,23 +352,45 @@ class Monitor:
         """
         for pm in self.running_physical_machines:
             self.cost += pm.daily_cost
+
+        debug()
         debug(f'{t}-th day\'s cost = {self.cost}')
+        debug(f'Online mapping: {self.virtual_physical_mapping}')
 
 
-def read():
+class Dataset:
+    def __init__(self, filename=None):
+        self.data = None
+        if filename is not None and os.path.exists(filename):
+            self.data = open(filename, 'r', encoding='utf-8').readlines()
+        self.cursor = 0
+
+    def __getitem__(self, item):
+        if self.data is None:
+            return input()
+        return self.data[item]
+
+    def pop(self):
+        if self.data is None:
+            return input()
+        line = self.data[self.cursor]
+        self.cursor += 1
+        return line
+
+
+def read(dataset: Dataset):
     # 可以采购的服务器类型和数量
     # ======================
 
     # 第一行包含一个整数 N(1≤N≤100)，表示可以采购的服务器类型数量。
-    N = int(input())
+    N = int(dataset.pop())
     # 接下来 N 行，每行描述一种类型的服务器，数据格式为：(型号, CPU 核数, 内存 大小, 硬件成本, 每日能耗成本)。
     # 例如(NV603, 92, 324, 53800, 500)表示一种服务器类型，其型号为 NV603，包含 92 个 CPU 核心，324G 内存，
     # 硬件成本为 53800，每日能耗成本为 500。CPU 核数，内存大小，硬件成本，每日能耗成本均为正整数。
     # 每台服务器的 CPU 核数以及内存大小不超过 1024，硬件成本不超过 5 × 105 ，每日能耗成本不超过 5000。
     # 服务器型号长度不超过 20，仅由数字和大小写英文字符构成。
     for n in range(N):
-        line = re.sub('[ ()]', '', input().strip())
-        if DEBUG: debug(line)
+        line = re.sub('[ ()]', '', dataset.pop().strip())
 
         model, cpu, ram, fixed_cost, daily_cost = line.split(',')
         possible_physical_machines[model] = {'cpu': int(cpu),
@@ -358,15 +400,16 @@ def read():
         # PhysicalMachine(model, int(cpu), int(ram), float(fixed_cost), float(daily_cost))
         # ==> end of N
 
-    debug('====>')
-    debug(f'Possible Physical Machines: {possible_physical_machines}')
-    debug('')
+    debug()
+    debug(f'Possible Physical Machines')
+    debug(f'==========================\n')
+    debug(possible_physical_machines)
 
     # 可供售卖的虚拟机类型和数量
     # ======================
 
     # 接下来一行包含一个整数 M(1≤M≤1000)，表示售卖的虚拟机类型数量。
-    M = int(input())
+    M = int(dataset.pop())
     # 接下来 M 行，每行描述一种类型的虚拟机，数据格式为：(型号, CPU 核数, 内存大小, 是否双节点部署)。
     # 是否双节点部署用 0 和 1 表示，0 表示单节点部署，1 表示双节点部署。
     #   例如：
@@ -375,8 +418,7 @@ def read():
     # CPU 核数，内存大小均为正整数。
     # 对于每种类型的虚拟机，数据集保证至少存在一种服务器可以容纳。虚拟机型号长度不超过 20，仅由数字，大小写英文字符和'.'构成。
     for m in range(M):
-        line = re.sub('[ ()]', '', input().strip())
-        if DEBUG: debug(line)
+        line = re.sub('[ ()]', '', dataset.pop().strip())
 
         model, cpu, ram, double_type = line.split(',')
         possible_virtual_machines[model] = {'cpu': int(cpu),
@@ -385,9 +427,10 @@ def read():
         # VirtualMachine(model, int(cpu), int(ram), bool(double_type))
         # ==> end of M
 
-    debug('====>')
-    debug(f'Possible Virtual Machines: {possible_virtual_machines}')
-    debug('')
+    debug()
+    debug(f'Possible Virtual Machines')
+    debug(f'=========================\n')
+    debug(possible_virtual_machines)
 
     # 每日操作
     # ======
@@ -395,16 +438,16 @@ def read():
     monitor = Monitor()
 
     # 接下来一行包含一个整数 T(1≤T≤1000)，表示题目共会给出 T 天的用户请求序列数据。
-    T = int(input())
+    T = int(dataset.pop())
 
-    debug('====>')
-    print(f'Daily operations...')
-    debug('')
+    debug()
+    debug(f'Daily operations')
+    debug(f'================\n')
 
     # 接下来会按顺序给出 T 天的用户请求序列
     for t in range(T):
         # 对于每一天的数据，第一行包含一个非负整数 R 表示当天共有 R 条请求。
-        R = int(input())
+        R = int(dataset.pop())
 
         """
         1. 扩容阶段
@@ -421,8 +464,7 @@ def read():
         # 对于删除操作，数据集保证对应 ID 的虚拟机一定存在。
         # 用户创建请求数量总数不超过 10^5 。
         for r in range(R):
-            line = re.sub('[ ()]', '', input().strip())
-            if DEBUG: debug(line)
+            line = re.sub('[ ()]', '', dataset.pop().strip())
 
             info = line.split(',')
 
@@ -478,7 +520,11 @@ def main():
     # process
     # to write standard output
     # sys.stdout.flush()
-    read()
+    trainings = sorted(glob(os.path.join(os.path.abspath(os.path.dirname(__file__)), '..', '..',
+                                         'training-data',
+                                         'training-[0-9].txt')))
+    dataset = Dataset(trainings[0])
+    read(dataset)
 
 
 if __name__ == "__main__":
