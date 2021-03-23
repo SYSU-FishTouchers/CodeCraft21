@@ -4,13 +4,23 @@ import os
 import sys
 import re
 from glob import glob
+import time
 
 DEBUG = True
 
 
 def debug(info='', linesep=os.linesep):
-    if not DEBUG:
-        return
+    """
+    调试信息
+    ======
+
+    :param info: 信息内容
+    :param linesep: 断行符号
+    :return: 无
+    """
+
+    # 非debug模式下不输出
+    if not DEBUG: return
 
     if isinstance(info, str):
         line = info
@@ -32,6 +42,20 @@ def debug(info='', linesep=os.linesep):
 
 
 def react(info: str, linesep=os.linesep):
+    """
+    输出信息
+    ======
+
+    和裁判系统的操作信息
+
+    :param info: 信息内容
+    :param linesep: 断行符号
+    :return: 无
+    """
+
+    # debug模式下不输出操作信息
+    if DEBUG: return
+
     info += linesep
     sys.stdout.write(info)
     sys.stdout.flush()
@@ -60,7 +84,6 @@ class Device:
 
         :param volume: 总容量
         """
-        assert volume % 2 == 0
         self.volume = volume
         self.free = volume
 
@@ -108,8 +131,8 @@ class PhysicalMachine:
         # 你可以理解为每台服务器内部都存在两个 Numa 节点：A 和 B（下文中提到的节点均指 Numa 节点）。
         # 服务器拥有的资源（CPU 和内存）均匀分布在这两个节点上。
         # 以 NV603 为例，其 A、B 两个节点分别包含 46C 和 162G 的资源。保证服务器的 CPU 核数和内存大小均为偶数。
-        self.A = Numa(cpu / 2, ram / 2)
-        self.B = Numa(cpu / 2, ram / 2)
+        self.A = Numa(cpu // 2, ram // 2)
+        self.B = Numa(cpu // 2, ram // 2)
 
         # 服务器成本：数据中心使用每台服务器的成本由两部分构成：硬件成本和能耗成本。
         # 硬件成本是在采购服务器时的一次性支出，能耗成本是后续服务器使用过程中的持续支出。
@@ -139,8 +162,8 @@ class PhysicalMachine:
         # 并且每个节点提供总需求资源的一半。
         # 双节点部署的虚拟机保证其 CPU 和内存需求量都是偶数。
         if vm.double_type:
-            assert vm.cpu % 2 == 0 and vm.ram % 2 == 0
-            cpu, ram = vm.cpu / 2, vm.ram / 2
+            assert vm.cpu % 2 == 0 and vm.ram % 2 == 0, f'Failed with {vm.cpu}C, {vm.ram}G, {"Double" if vm.double_type else "Single"}'
+            cpu, ram = vm.cpu // 2, vm.ram // 2
 
             if self.A.try_allocate(cpu, ram) and self.B.try_allocate(cpu, ram):
                 self.running_virtual_nodes[idx] = vm
@@ -215,6 +238,9 @@ class Monitor:
 
         # 总成本
         self.cost = 0
+
+        # 开始时间
+        self.start_time = time.time()
 
     def buy_physical_machines(self, model: str, Q: int):
         """
@@ -354,8 +380,9 @@ class Monitor:
             self.cost += pm.daily_cost
 
         debug()
-        debug(f'{t}-th day\'s cost = {self.cost}')
-        debug(f'Online mapping: {self.virtual_physical_mapping}')
+        debug(f'{t:3>d}-th day\'s cost = {self.cost}')
+        debug(f'        Time cost = {time.time() - self.start_time:.3f}s')
+        # debug(f'Online mapping: {self.virtual_physical_mapping}')
 
 
 class Dataset:
@@ -379,6 +406,8 @@ class Dataset:
 
 
 def read(dataset: Dataset):
+    global possible_physical_machines, possible_virtual_machines
+
     # 可以采购的服务器类型和数量
     # ======================
 
@@ -399,6 +428,9 @@ def read(dataset: Dataset):
                                              'daily_cost': float(daily_cost)}
         # PhysicalMachine(model, int(cpu), int(ram), float(fixed_cost), float(daily_cost))
         # ==> end of N
+
+    possible_physical_machines = dict(
+        sorted(possible_physical_machines.items(), key=lambda x: x[1]['cpu'] * 2 + x[1]['ram'], reverse=True))
 
     debug()
     debug(f'Possible Physical Machines')
@@ -423,7 +455,7 @@ def read(dataset: Dataset):
         model, cpu, ram, double_type = line.split(',')
         possible_virtual_machines[model] = {'cpu': int(cpu),
                                             'ram': int(ram),
-                                            'double_type': bool(double_type)}
+                                            'double_type': (double_type == 1)}
         # VirtualMachine(model, int(cpu), int(ram), bool(double_type))
         # ==> end of M
 
@@ -523,7 +555,7 @@ def main():
     trainings = sorted(glob(os.path.join(os.path.abspath(os.path.dirname(__file__)), '..', '..',
                                          'training-data',
                                          'training-[0-9].txt')))
-    dataset = Dataset(trainings[0])
+    dataset = Dataset(trainings[1])
     read(dataset)
 
 
