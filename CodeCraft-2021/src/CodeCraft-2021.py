@@ -295,26 +295,26 @@ class Monitor:
         可以优化的点
         ==========
         
-        如果还不能创建那就再买（臭方法）
+        如果还不能创建那就再买（发现这时候已经不能买了）
         """
-        while not done:
-            # 确定有物理机可以买，且已买的物理机数量不超过10^5
-            if not len(possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
-                break
-
-            """
-            可以优化的点
-            ==========
-
-            目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
-            """
-            self.buy_physical_machines(list(possible_physical_machines.keys())[0], Q=1)
-
-            if self.running_physical_machines[-1].try_add_virtual_node(model, idx):
-                done = True
-                # 记录虚拟机节点所在的物理机的id
-                self.virtual_physical_mapping[idx] = len(self.running_physical_machines) - 1
-                break
+        # while not done:
+        #     # 确定有物理机可以买，且已买的物理机数量不超过10^5
+        #     if not len(possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
+        #         break
+        #
+        #     """
+        #     可以优化的点
+        #     ==========
+        #
+        #     目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
+        #     """
+        #     self.buy_physical_machines(list(possible_physical_machines.keys())[0], Q=1)
+        #
+        #     if self.running_physical_machines[-1].try_add_virtual_node(model, idx):
+        #         done = True
+        #         # 记录虚拟机节点所在的物理机的id
+        #         self.virtual_physical_mapping[idx] = len(self.running_physical_machines) - 1
+        #         break
 
         return done
 
@@ -486,6 +486,12 @@ def read(dataset: Dataset):
         这里是预先知道了新的一天的所有请求，然后进行扩容和删除
         """
 
+        """
+        1. 记录需求
+        """
+
+        requests = []
+
         # 接下来 R 行，按顺序给出每一条请求数据。请求数据的格式为：
         #     (add, 虚拟机型号, 虚拟机 ID)    创建一台虚拟机
         #     (del, 虚拟机 ID)              删除一台虚拟机
@@ -502,19 +508,19 @@ def read(dataset: Dataset):
 
             if len(info) >= 3 and info[0] == 'add':
                 model, idx = info[1:]
-                # 有可能会物理机分配不出来资源，这时候需要购置更多的物理机，因此也包含cost计算和更新
-                monitor.add_virtual_machine(model, idx)
+                requests.append(('add', model, idx))
             elif len(info) >= 2 and info[0] == 'del':
                 idx = info[-1]
-                monitor.del_virtual_machine(idx)
+                requests.append(('add', idx))
             else:
                 pass
             # ==> end of the r-th request
 
         """
-        2. 然后是裁判系统给出所有请求
+        2. 扩容物理机
         """
 
+        # TODO: 增加扩容物理机的规则
         pass
 
         """
@@ -529,7 +535,17 @@ def read(dataset: Dataset):
         monitor.migration_physical_machine()
 
         """
-        4. 空闲物理机的关闭
+        4. 部署虚拟机节点
+        """
+
+        for r in requests:
+            if r[0] == 'add':
+                monitor.add_virtual_machine(r[1], r[2])
+            else:
+                monitor.del_virtual_machine(r[1])
+
+        """
+        5. 空闲物理机的关闭
         """
 
         # 裁判程序会将当前有负载(至少部署了一台虚拟机)的服务器视为开机状态，没有任何负载的服务器视为关机状态
