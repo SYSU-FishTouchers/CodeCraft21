@@ -6,7 +6,8 @@ import re
 from glob import glob
 import time
 
-DEBUG = True
+VERBOSE = False
+OFFLINE = False
 
 
 def debug(info='', linesep=os.linesep):
@@ -20,7 +21,7 @@ def debug(info='', linesep=os.linesep):
     """
 
     # 非debug模式下不输出
-    if not DEBUG: return
+    if not VERBOSE: return
 
     if isinstance(info, str):
         line = info
@@ -52,9 +53,6 @@ def react(info: str, linesep=os.linesep):
     :param linesep: 断行符号
     :return: 无
     """
-
-    # debug模式下不输出操作信息
-    if DEBUG: return
 
     info += linesep
     sys.stdout.write(info)
@@ -252,6 +250,7 @@ class Monitor:
         assert model in possible_physical_machines.keys()
 
         # 向裁判系统购买 Q 台物理机
+        react(f'(purchase, 1)')
         react(f'({model}, {Q})')
 
         # 增加 Q 台物理机
@@ -555,7 +554,12 @@ def main():
     trainings = sorted(glob(os.path.join(os.path.abspath(os.path.dirname(__file__)), '..', '..',
                                          'training-data',
                                          'training-[0-9].txt')))
-    dataset = Dataset(trainings[1])
+
+    if OFFLINE:
+        dataset = Dataset(trainings[1])
+    else:
+        dataset = Dataset()
+
     read(dataset)
 
 
