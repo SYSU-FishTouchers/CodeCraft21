@@ -6,8 +6,7 @@ import re
 from glob import glob
 import time
 
-VERBOSE = False
-OFFLINE = False
+import argparse
 
 
 def debug(info='', linesep=os.linesep):
@@ -21,7 +20,7 @@ def debug(info='', linesep=os.linesep):
     """
 
     # 非debug模式下不输出
-    if not VERBOSE: return
+    if not args.verbose: return
 
     if isinstance(info, str):
         line = info
@@ -148,7 +147,7 @@ class PhysicalMachine:
 
         :param model:
         :param idx:
-        :return:
+        :return: 双节点部署：'AB' ， 单节点部署：'A' 或 'B'
         """
 
         vm = VirtualMachine(model,
@@ -165,7 +164,7 @@ class PhysicalMachine:
 
             if self.A.try_allocate(cpu, ram) and self.B.try_allocate(cpu, ram):
                 self.running_virtual_nodes[idx] = vm
-                return True
+                return 'AB'
 
         # 单节点部署指的是一台虚拟机所需的资源（CPU 和内存）完全由主机上的一个节点提供
         else:
@@ -186,12 +185,12 @@ class PhysicalMachine:
             """
             if self.A.try_allocate(cpu, ram):
                 self.running_virtual_nodes[idx] = vm
-                return True
+                return 'A'
             elif self.B.try_allocate(cpu, ram):
                 self.running_virtual_nodes[idx] = vm
-                return True
+                return 'B'
 
-        return False
+        return ''
 
     def del_virtual_node(self, idx):
         """
@@ -240,18 +239,53 @@ class Monitor:
         # 开始时间
         self.start_time = time.time()
 
-    def buy_physical_machines(self, model: str, Q: int):
+        # 扩容需求
+        self.demands = {}
+
+        # 部署任务
+        self.commands = []
+
+    def deploy_vm_daily(self):
+        """
+        每日节点部署
+        ==========
+
+        :return:
+        """
+
+        for cmd in self.commands:
+            react(cmd)
+        self.commands.clear()
+
+    def meet_demands_daily(self):
+        """
+        每日扩容
+        ======
+
+        :return:
+        """
+
+        react(f'(purchase, {len(self.demands)})')
+        for model, Q in self.demands.items():
+            react(f'({model}, {Q})')
+        self.demands.clear()
+
+    def record_daily_demands(self, model: str, Q: int = 1):
         """
         购买 Q 台指定型号的物理机
+        =====================
+
         :param model:
         :param Q: 购买数量
         :return:
         """
         assert model in possible_physical_machines.keys()
 
-        # 向裁判系统购买 Q 台物理机
-        react(f'(purchase, 1)')
-        react(f'({model}, {Q})')
+        # 提出需要 Q 台 model 型号的物理机
+        if model in self.demands.keys():
+            self.demands[model] += Q
+        else:
+            self.demands[model] = Q
 
         # 增加 Q 台物理机
         for q in range(Q):
@@ -265,9 +299,10 @@ class Monitor:
             # 计算固定成本
             self.cost += pm.fixed_cost
 
-    def add_virtual_machine(self, model: str, idx):
+    def try_add_virtual_machine(self, model: str, idx):
         """
         来自用户的请求，新增虚拟机
+        ======================
 
         :param model: 虚拟机型号
         :param idx: 虚拟机节点的id
@@ -285,10 +320,16 @@ class Monitor:
         最好能以天为单位求最优解
         """
         for i, pm in enumerate(self.running_physical_machines):
-            if pm.try_add_virtual_node(model, idx):
-                done = True
+            result = pm.try_add_virtual_node(model, idx)
+            done = (result != '')
+            if done:
                 # 记录虚拟机节点所在的物理机的id
                 self.virtual_physical_mapping[idx] = i
+                # 记录部署结果
+                if result == 'AB':
+                    self.commands.append(f'({i})')
+                else:
+                    self.commands.append(f'({i}, {result})')
                 break
 
         """
@@ -297,30 +338,39 @@ class Monitor:
         
         如果还不能创建那就再买（发现这时候已经不能买了）
         """
-        # while not done:
-        #     # 确定有物理机可以买，且已买的物理机数量不超过10^5
-        #     if not len(possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
-        #         break
-        #
-        #     """
-        #     可以优化的点
-        #     ==========
-        #
-        #     目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
-        #     """
-        #     self.buy_physical_machines(list(possible_physical_machines.keys())[0], Q=1)
-        #
-        #     if self.running_physical_machines[-1].try_add_virtual_node(model, idx):
-        #         done = True
-        #         # 记录虚拟机节点所在的物理机的id
-        #         self.virtual_physical_mapping[idx] = len(self.running_physical_machines) - 1
-        #         break
+        while not done:
+            # 确定有物理机可以买，且已买的物理机数量不超过10^5
+            if not len(possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
+                break
+
+            """
+            可以优化的点
+            ==========
+
+            目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
+            """
+            self.record_daily_demands(list(possible_physical_machines.keys())[0], Q=1)
+
+            result = self.running_physical_machines[-1].try_add_virtual_node(model, idx)
+            done = (result != '')
+            if done:
+                # 物理机id
+                i = len(self.running_physical_machines) - 1
+                # 记录虚拟机节点所在的物理机的id
+                self.virtual_physical_mapping[idx] = i
+                # 记录部署结果
+                if result == 'AB':
+                    self.commands.append(f'({i})')
+                else:
+                    self.commands.append(f'({i}, {result})')
+                break
 
         return done
 
     def del_virtual_machine(self, idx):
         """
         来自用户的请求，删除虚拟机
+        ======================
 
         :param idx: 虚拟机节点的id
         :return:
@@ -380,8 +430,9 @@ class Monitor:
             self.cost += pm.daily_cost
 
         debug()
-        debug(f'{t:3>d}-th day\'s cost = {self.cost}')
-        debug(f'        Time cost = {time.time() - self.start_time:.3f}s')
+        debug(f'{t:>4d}-th day\'s cost = {self.cost}')
+        debug(f'         Time cost = {time.time() - self.start_time:.3f}s')
+        debug()
         # debug(f'Online mapping: {self.virtual_physical_mapping}')
 
 
@@ -455,7 +506,7 @@ def read(dataset: Dataset):
         model, cpu, ram, double_type = line.split(',')
         possible_virtual_machines[model] = {'cpu': int(cpu),
                                             'ram': int(ram),
-                                            'double_type': (double_type == 1)}
+                                            'double_type': (double_type == '1')}
         # VirtualMachine(model, int(cpu), int(ram), bool(double_type))
         # ==> end of M
 
@@ -482,11 +533,6 @@ def read(dataset: Dataset):
         R = int(dataset.pop())
 
         """
-        1. 扩容阶段
-        这里是预先知道了新的一天的所有请求，然后进行扩容和删除
-        """
-
-        """
         1. 记录需求
         """
 
@@ -508,10 +554,12 @@ def read(dataset: Dataset):
 
             if len(info) >= 3 and info[0] == 'add':
                 model, idx = info[1:]
-                requests.append(('add', model, idx))
+                # requests.append(('add', model, idx))
+                monitor.try_add_virtual_machine(model, idx)
             elif len(info) >= 2 and info[0] == 'del':
                 idx = info[-1]
-                requests.append(('add', idx))
+                # requests.append(('add', idx))
+                monitor.del_virtual_machine(idx)
             else:
                 pass
             # ==> end of the r-th request
@@ -520,8 +568,7 @@ def read(dataset: Dataset):
         2. 扩容物理机
         """
 
-        # TODO: 增加扩容物理机的规则
-        pass
+        monitor.meet_demands_daily()
 
         """
         3. 存量虚拟机的迁移
@@ -538,11 +585,13 @@ def read(dataset: Dataset):
         4. 部署虚拟机节点
         """
 
-        for r in requests:
-            if r[0] == 'add':
-                monitor.add_virtual_machine(r[1], r[2])
-            else:
-                monitor.del_virtual_machine(r[1])
+        monitor.deploy_vm_daily()
+
+        # for r in requests:
+        #     if r[0] == 'add':
+        #         monitor.try_add_virtual_machine(r[1], r[2])
+        #     else:
+        #         monitor.del_virtual_machine(r[1])
 
         """
         5. 空闲物理机的关闭
@@ -572,8 +621,8 @@ def main():
                                          'training-data',
                                          'training-[0-9].txt')))
 
-    if OFFLINE:
-        dataset = Dataset(trainings[1])
+    if args.dataset is not None:
+        dataset = Dataset(trainings[int(args.dataset)])
     else:
         dataset = Dataset()
 
@@ -581,6 +630,20 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-d', '--dataset', default=None,
+                        help='Index of datasets, default: None (means using stdin as input)')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='Print debug information, default: Not')
+
+    parser.set_defaults(verbose=False)
+    args = parser.parse_args()
+
+    try:
+        args.dataset = int(args.dataset)
+    except (ValueError, TypeError):
+        args.dataset = None
+
     # 可供扩容的物理机
     possible_physical_machines = {}
     # 可供请求的虚拟机
