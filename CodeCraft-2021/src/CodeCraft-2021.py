@@ -122,7 +122,7 @@ class Monitor:
         可以优化的点
         ==========
         
-        如果还不能创建那就再买（发现这时候已经不能买了）
+        如果还不能创建那就再买
         """
         while not done:
             # 确定有物理机可以买，且已买的物理机数量不超过10^5
@@ -274,8 +274,8 @@ class Monitor:
         debug()
         debug(f'{t:>4d}-th day\'s cost = {self.cost}')
         debug(f'         Time cost = {time.time() - self.start_time:.3f}s')
+        debug(f'  Running machines : pm = {len(self.running_physical_machines)} \t vm = {len(self.virtual_physical_mapping)}')
         debug()
-        # debug(f'Online mapping: {self.virtual_physical_mapping}')
 
 
 class Dataset:
