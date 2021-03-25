@@ -25,20 +25,15 @@ def debug(info: object = '', linesep: str = os.linesep) -> None:
     if not args.verbose: return
 
     if isinstance(info, str):
-        line = info
-
         # 对非空输出行加前缀
-        if line != '': line = '[Debug] ' + line
+        line = ''.join(['[Debug] ' if info != '' else '', info, linesep])
 
-        line += linesep
         sys.stderr.write(line)
         sys.stderr.flush()
 
     elif isinstance(info, dict):
         for k, v in info.items():
-            line = '[Debug] '
-            line += f'{k}: {v}'
-            line += linesep
+            line = ''.join(['[Debug] ', f'{k}: {v}', linesep])
             sys.stderr.write(line)
             sys.stderr.flush()
 
@@ -61,9 +56,9 @@ def react(info: str, linesep=os.linesep):
 
 
 class Monitor:
-    def __init__(self):
+    def __init__(self, T):
         # 记录所有正在运行的物理机
-        self.running_physical_machines = []
+        self.running_physical_machines = [[] for _ in range(T)]
 
         # 记录虚拟机节点所在的物理机的id
         self.virtual_physical_mapping = {}
@@ -80,13 +75,14 @@ class Monitor:
         # 部署任务
         self.commands = []
 
-    def try_add_virtual_machine(self, model: str, idx):
+    def try_add_virtual_machine(self, model: str, idx, t: int = 0):
         """
         来自用户的请求，新增虚拟机
         ======================
 
         :param model: 虚拟机型号
         :param idx: 虚拟机节点的id
+        :param t: 天数
         :return:
         """
 
@@ -105,18 +101,17 @@ class Monitor:
                             possible_virtual_machines[model]['ram'],
                             possible_virtual_machines[model]['double_type'])
 
-        for i, pm in enumerate(self.running_physical_machines):
-            result = pm.try_add_virtual_node(vm, idx)
-            done = (result != '')
-            if done:
-                # 记录虚拟机节点所在的物理机的id
-                self.virtual_physical_mapping[idx] = i
-                # 记录部署结果
-                if result == 'AB':
-                    self.commands.append(f'({i})')
-                else:
-                    self.commands.append(f'({i}, {result})')
-                break
+        for day in range(t + 1):
+            for i, pm in enumerate(self.running_physical_machines[day]):
+                result = pm.try_add_virtual_node(vm, idx)
+                done = (result != '')
+                if done:
+                    # 记录虚拟机节点所在的物理机的id
+                    self.virtual_physical_mapping[idx] = (day, i)
+                    # 记录部署结果
+                    self.commands.append("".join([f"({i}", f", {result})" if result == "AB" else ")"]))
+                    break
+            if done: break
 
         """
         可以优化的点
@@ -124,10 +119,10 @@ class Monitor:
         
         如果还不能创建那就再买
         """
-        while not done:
+        if not done:
             # 确定有物理机可以买，且已买的物理机数量不超过10^5
             if not len(possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
-                break
+                return done
 
             """
             可以优化的点
@@ -135,31 +130,28 @@ class Monitor:
 
             目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
             """
-            self.record_daily_demands(list(possible_physical_machines.keys())[0], Q=1)
+            self.record_daily_demands(list(possible_physical_machines.keys())[0], Q=1, t=t)
 
-            result = self.running_physical_machines[-1].try_add_virtual_node(vm, idx)
+            result = self.running_physical_machines[t][-1].try_add_virtual_node(vm, idx)
             done = (result != '')
             if done:
                 # 物理机id
-                i = len(self.running_physical_machines) - 1
+                i = len(self.running_physical_machines[t]) - 1
                 # 记录虚拟机节点所在的物理机的id
-                self.virtual_physical_mapping[idx] = i
+                self.virtual_physical_mapping[idx] = (t, i)
                 # 记录部署结果
-                if result == 'AB':
-                    self.commands.append(f'({i})')
-                else:
-                    self.commands.append(f'({i}, {result})')
-                break
+                self.commands.append("".join([f"({i}", f", {result})" if result == "AB" else ")"]))
 
         return done
 
-    def record_daily_demands(self, model: str, Q: int = 1):
+    def record_daily_demands(self, model: str, Q: int = 1, t: int = 0):
         """
         购买 Q 台指定型号的物理机
         =====================
 
         :param model:
         :param Q: 购买数量
+        :param t: 当前天数
         :return:
         """
         assert model in possible_physical_machines.keys()
@@ -178,7 +170,7 @@ class Monitor:
                                  possible_physical_machines[model]['fixed_cost'],
                                  possible_physical_machines[model]['daily_cost'])
             # 记录已有的物理机
-            self.running_physical_machines.append(pm)
+            self.running_physical_machines[t].append(pm)
             # 计算固定成本
             self.cost += pm.fixed_cost
 
@@ -192,8 +184,8 @@ class Monitor:
         """
 
         # 找到虚拟机节点所在的物理机
-        i = self.virtual_physical_mapping[idx]
-        pm = self.running_physical_machines[i]
+        day, i = self.virtual_physical_mapping[idx]
+        pm = self.running_physical_machines[day][i]
         # 删除虚拟机节点
         pm.del_virtual_node(idx)
         # 删除记录
@@ -243,7 +235,7 @@ class Monitor:
             react(cmd)
         self.commands.clear()
 
-    def power_off_physical_machines_daily(self):
+    def power_off_physical_machines_daily(self, t=0):
         """
         对没有负载的服务器关机
         ==================
@@ -253,12 +245,13 @@ class Monitor:
         没有任何负载的服务器视为关机状态
         """
 
-        mask = [False] * len(self.running_physical_machines)
+        for day in range(t):
+            mask = [False] * len(self.running_physical_machines[day])
 
-        for i, pm in enumerate(self.running_physical_machines):
-            mask[i] = (len(pm.running_virtual_nodes) > 0)
+            for i, pm in enumerate(self.running_physical_machines[day]):
+                mask[i] = (len(pm.running_virtual_nodes) > 0)
 
-        self.running_physical_machines = np.array(self.running_physical_machines)[mask].tolist()
+            self.running_physical_machines[day] = np.array(self.running_physical_machines[day])[mask].tolist()
 
     def calculate_cost_daily(self, t):
         """
@@ -268,13 +261,19 @@ class Monitor:
         :param t: index of day
         :return:
         """
-        for pm in self.running_physical_machines:
-            self.cost += pm.daily_cost
+
+        num_running_physical_machines = 0
+
+        for day in range(t):
+            num_running_physical_machines += len(self.running_physical_machines[day])
+            for pm in self.running_physical_machines[day]:
+                self.cost += pm.daily_cost
 
         debug()
         debug(f'{t:>4d}-th day\'s cost = {self.cost}')
         debug(f'         Time cost = {time.time() - self.start_time:.3f}s')
-        debug(f'  Running machines : pm = {len(self.running_physical_machines)} \t vm = {len(self.virtual_physical_mapping)}')
+        debug(f'  Running machines : pm = {num_running_physical_machines} \t '
+              f'vm = {len(self.virtual_physical_mapping)}')
         debug()
 
 
@@ -360,10 +359,10 @@ def process(dataset: Dataset):
     # 每日操作
     # ======
 
-    monitor = Monitor()
-
     # 接下来一行包含一个整数 T(1≤T≤1000)，表示题目共会给出 T 天的用户请求序列数据。
     T = int(dataset.pop())
+
+    monitor = Monitor(T)
 
     debug()
     debug(f'Daily operations')
@@ -375,6 +374,8 @@ def process(dataset: Dataset):
         """
         1. 记录需求
         """
+
+        # if t % 200 == 1: gc.collect()
 
         # 对于每一天的数据，第一行包含一个非负整数 R 表示当天共有 R 条请求。
         R = int(dataset.pop())
@@ -396,7 +397,7 @@ def process(dataset: Dataset):
             if len(info) >= 3 and info[0] == 'add':
                 model, idx = info[1:]
                 # requests.append(('add', model, idx))
-                monitor.try_add_virtual_machine(model, idx)
+                monitor.try_add_virtual_machine(model, idx, t)
             elif len(info) >= 2 and info[0] == 'del':
                 idx = info[-1]
                 # requests.append(('add', idx))
@@ -447,6 +448,7 @@ def process(dataset: Dataset):
         monitor.calculate_cost_daily(t)
 
         # ==> end of the t-th day
+    print(f'cost time: {time.time() - monitor.start_time}')
 
 
 def main():
