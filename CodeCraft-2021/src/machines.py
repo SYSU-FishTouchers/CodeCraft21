@@ -45,8 +45,11 @@ class Numa:
             self.cpu.free -= cpu
             self.ram.free -= ram
             return True
-
         return False
+
+    def release(self, cpu, ram):
+        self.cpu.free += cpu
+        self.ram.free += ram
 
 
 class PhysicalMachine:
@@ -79,9 +82,9 @@ class PhysicalMachine:
         self.daily_cost = daily_cost
 
         # 目前正在此物理机上运行的虚拟机节点
-        self.running_virtual_nodes = {}
+        self.running_virtual_machiness = {}
 
-    def try_add_virtual_node(self, vm: VirtualMachine, idx: int):
+    def try_add_virtual_machines(self, vm: VirtualMachine, idx: int):
         """
         尝试指派一个虚拟机节点
 
@@ -98,7 +101,7 @@ class PhysicalMachine:
             cpu, ram = vm.cpu // 2, vm.ram // 2
 
             if self.A.try_allocate(cpu, ram) and self.B.try_allocate(cpu, ram):
-                self.running_virtual_nodes[idx] = vm
+                self.running_virtual_machiness[idx] = (vm, 'AB')
                 return 'AB'
 
         # 单节点部署指的是一台虚拟机所需的资源（CPU 和内存）完全由主机上的一个节点提供
@@ -119,15 +122,15 @@ class PhysicalMachine:
             2. 单物理机内根据 Numa A 和 Numa B 的占用情况来分配。
             """
             if self.A.try_allocate(cpu, ram):
-                self.running_virtual_nodes[idx] = vm
+                self.running_virtual_machiness[idx] = (vm, 'A')
                 return 'A'
             elif self.B.try_allocate(cpu, ram):
-                self.running_virtual_nodes[idx] = vm
+                self.running_virtual_machiness[idx] = (vm, 'B')
                 return 'B'
 
         return ''
 
-    def del_virtual_node(self, idx):
+    def del_virtual_machines(self, idx):
         """
         删除给定下标的虚拟机节点
 
@@ -135,10 +138,20 @@ class PhysicalMachine:
         :return:
         """
 
-        if idx not in self.running_virtual_nodes.keys():
+        if idx not in self.running_virtual_machiness.keys():
             return False
 
-        self.running_virtual_nodes.pop(idx)
+        vm, numa = self.running_virtual_machiness[idx]
+
+        if numa == 'A':
+            self.A.release(vm.cpu, vm.ram)
+        elif numa == 'B':
+            self.B.release(vm.cpu, vm.ram)
+        else:
+            self.A.release(vm.cpu, vm.ram)
+            self.B.release(vm.cpu, vm.ram)
+
+        self.running_virtual_machiness.pop(idx)
         return True
 
     def get_free_resources(self):
@@ -150,11 +163,11 @@ class PhysicalMachine:
 
         return self.A.free(), self.B.free()
 
-    def get_virtual_nodes(self):
+    def get_virtual_machiness(self):
         """
         获取所有正在运行的虚拟机节点
 
         :return: 所有正在运行的虚拟机节点
         """
 
-        return self.running_virtual_nodes
+        return self.running_virtual_machiness

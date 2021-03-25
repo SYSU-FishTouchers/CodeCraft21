@@ -5,7 +5,6 @@ import sys
 import re
 from glob import glob
 import time
-
 import argparse
 
 from machines import VirtualMachine, PhysicalMachine
@@ -75,6 +74,24 @@ class Monitor:
         # 部署任务
         self.commands = []
 
+        # 每天的分配候选机器
+        self.candidates = []
+
+        self.best_pm = list(possible_physical_machines.keys())[0]
+
+    def worker(self, vm, idx, start, end, step):
+        mask = np.arange(start, end, step)
+        if mask.size <= 0:
+            return
+
+        running_physical_machines = np.array(self.running_physical_machines)[mask]
+
+        suggestions = []
+        for i, pms in enumerate(running_physical_machines):
+            for j, pm in enumerate(pms):
+                if pm.try_add_virtual_machines(vm, idx) != '':
+                    suggestions.append({'day': mask[i], 'index': j, 'daily_cost': pm.daily_cost})
+
     def try_add_virtual_machine(self, model: str, idx, t: int = 0):
         """
         来自用户的请求，新增虚拟机
@@ -101,9 +118,19 @@ class Monitor:
                             possible_virtual_machines[model]['ram'],
                             possible_virtual_machines[model]['double_type'])
 
+        # pool = Pool()
+        # batch_size = (t + 1) // 4
+        # self.running_physical_machines = np.array(self.running_physical_machines)
+        #
+        # num_proc = 4
+        #
+        # for i in range(num_proc):
+        #     mask = np.arange(i, t + 1, num_proc)
+        #     pms = self.running_physical_machines[mask]
+
         for day in range(t + 1):
             for i, pm in enumerate(self.running_physical_machines[day]):
-                result = pm.try_add_virtual_node(vm, idx)
+                result = pm.try_add_virtual_machines(vm, idx)
                 done = (result != '')
                 if done:
                     # 记录虚拟机节点所在的物理机的id
@@ -112,6 +139,8 @@ class Monitor:
                     self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
                     break
             if done: break
+
+        # self.running_physical_machines = self.running_physical_machines.tolist()
 
         """
         可以优化的点
@@ -130,9 +159,9 @@ class Monitor:
 
             目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
             """
-            self.record_daily_demands(list(possible_physical_machines.keys())[0], Q=1, t=t)
+            self.record_daily_demands(self.best_pm, Q=1, t=t)
 
-            result = self.running_physical_machines[t][-1].try_add_virtual_node(vm, idx)
+            result = self.running_physical_machines[t][-1].try_add_virtual_machines(vm, idx)
             done = (result != '')
             if done:
                 # 物理机id
@@ -187,7 +216,7 @@ class Monitor:
         day, i = self.virtual_physical_mapping[idx]
         pm = self.running_physical_machines[day][i]
         # 删除虚拟机节点
-        pm.del_virtual_node(idx)
+        pm.del_virtual_machines(idx)
         # 删除记录
         self.virtual_physical_mapping.pop(idx)
 
@@ -249,7 +278,7 @@ class Monitor:
             mask = [False] * len(self.running_physical_machines[day])
 
             for i, pm in enumerate(self.running_physical_machines[day]):
-                mask[i] = (len(pm.running_virtual_nodes) > 0)
+                mask[i] = (len(pm.running_virtual_machiness) > 0)
 
             self.running_physical_machines[day] = np.array(self.running_physical_machines[day])[mask].tolist()
 
@@ -263,17 +292,26 @@ class Monitor:
         """
 
         num_running_physical_machines = 0
+        total_free_resource = []
 
         for day in range(t):
             num_running_physical_machines += len(self.running_physical_machines[day])
             for pm in self.running_physical_machines[day]:
                 self.cost += pm.daily_cost
 
+                if t == 799: total_free_resource.append(pm.get_free_resources())
+
+        if t == 799:
+            total_free_resource = np.array(total_free_resource)
+            # print(total_free_resource.shape)
+
+            total_free_resource = total_free_resource.sum(axis=0)
+            debug(total_free_resource)
+
         debug()
         debug(f'{t:>4d}-th day\'s cost = {self.cost}')
         debug(f'         Time cost = {time.time() - self.start_time:.3f}s')
-        debug(f'  Running machines : pm = {num_running_physical_machines} \t '
-              f'vm = {len(self.virtual_physical_mapping)}')
+        debug(f'  Running machines : pm = {num_running_physical_machines} \t vm = {len(self.virtual_physical_mapping)}')
         debug()
 
 
@@ -321,8 +359,25 @@ def process(dataset: Dataset):
         # PhysicalMachine(model, int(cpu), int(ram), float(fixed_cost), float(daily_cost))
         # ==> end of N
 
+    # # 以 cpu - ram 作为关键特征1，以 cpu+ram 的单价为关键特征2，升序
+    # # 得出性能最均衡的、性价比最高的服务器
+    # possible_physical_machines = dict(
+    #     sorted(possible_physical_machines.items(),
+    #            key=lambda x: (abs(x[1]['cpu'] - x[1]['ram']),
+    #                           (x[1]['fixed_cost'] + (10 * x[1]['daily_cost'])) / (x[1]['cpu'] + x[1]['ram'])),
+    #            reverse=False)
+    # )
+
+    # 以 cpu - ram 作为关键特征1，以 cpu+ram 的单价为关键特征2，升序
+    # 得出性能最均衡的、配置最高的服务器
     possible_physical_machines = dict(
-        sorted(possible_physical_machines.items(), key=lambda x: x[1]['cpu'] * 2 + x[1]['ram'], reverse=True))
+        sorted(possible_physical_machines.items(),
+               key=lambda x: (abs(x[1]['cpu'] - x[1]['ram']),
+                              -1 * (x[1]['cpu'] + x[1]['ram'])),
+               reverse=False)
+    )
+
+    # possible_physical_machines = dict(sorted(possible_physical_machines.items(), key=lambda x: x[1]['cpu'] + 2 * x[1]['ram'], reverse=True))
 
     debug()
     debug(f'Possible Physical Machines')
@@ -396,11 +451,9 @@ def process(dataset: Dataset):
 
             if len(info) >= 3 and info[0] == 'add':
                 model, idx = info[1:]
-                # requests.append(('add', model, idx))
                 monitor.try_add_virtual_machine(model, idx, t)
             elif len(info) >= 2 and info[0] == 'del':
                 idx = info[-1]
-                # requests.append(('add', idx))
                 monitor.del_virtual_machine(idx)
             else:
                 pass
@@ -435,7 +488,7 @@ def process(dataset: Dataset):
         """
 
         # 裁判程序会将当前有负载(至少部署了一台虚拟机)的服务器视为开机状态，没有任何负载的服务器视为关机状态
-        monitor.power_off_physical_machines_daily()
+        # monitor.power_off_physical_machines_daily()
 
         """
         5. 成本核算
@@ -448,7 +501,7 @@ def process(dataset: Dataset):
         monitor.calculate_cost_daily(t)
 
         # ==> end of the t-th day
-    print(f'cost time: {time.time() - monitor.start_time}')
+    debug(f'cost time: {time.time() - monitor.start_time}')
 
 
 def main():
