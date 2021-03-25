@@ -57,7 +57,7 @@ def react(info: str, linesep=os.linesep):
 class Monitor:
     def __init__(self, T):
         # 记录所有正在运行的物理机
-        self.running_physical_machines = [[] for _ in range(T)]
+        self.running_physical_machines = []
 
         # 记录虚拟机节点所在的物理机的id
         self.virtual_physical_mapping = {}
@@ -128,17 +128,15 @@ class Monitor:
         #     mask = np.arange(i, t + 1, num_proc)
         #     pms = self.running_physical_machines[mask]
 
-        for day in range(t + 1):
-            for i, pm in enumerate(self.running_physical_machines[day]):
-                result = pm.try_add_virtual_machines(vm, idx)
-                done = (result != '')
-                if done:
-                    # 记录虚拟机节点所在的物理机的id
-                    self.virtual_physical_mapping[idx] = (day, i)
-                    # 记录部署结果
-                    self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
-                    break
-            if done: break
+        for i, pm in enumerate(self.running_physical_machines):
+            result = pm.try_add_virtual_machines(vm, idx)
+            done = (result != '')
+            if done:
+                # 记录虚拟机节点所在的物理机的id
+                self.virtual_physical_mapping[idx] = i
+                # 记录部署结果
+                self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
+                break
 
         # self.running_physical_machines = self.running_physical_machines.tolist()
 
@@ -159,28 +157,27 @@ class Monitor:
 
             目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
             """
-            self.record_daily_demands(self.best_pm, Q=1, t=t)
+            self.record_daily_demands(self.best_pm, Q=1)
 
-            result = self.running_physical_machines[t][-1].try_add_virtual_machines(vm, idx)
+            result = self.running_physical_machines[-1].try_add_virtual_machines(vm, idx)
             done = (result != '')
             if done:
                 # 物理机id
-                i = len(self.running_physical_machines[t]) - 1
+                i = len(self.running_physical_machines) - 1
                 # 记录虚拟机节点所在的物理机的id
-                self.virtual_physical_mapping[idx] = (t, i)
+                self.virtual_physical_mapping[idx] = i
                 # 记录部署结果
                 self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
 
         return done
 
-    def record_daily_demands(self, model: str, Q: int = 1, t: int = 0):
+    def record_daily_demands(self, model: str, Q: int = 1):
         """
         购买 Q 台指定型号的物理机
         =====================
 
         :param model:
         :param Q: 购买数量
-        :param t: 当前天数
         :return:
         """
         assert model in possible_physical_machines.keys()
@@ -199,7 +196,7 @@ class Monitor:
                                  possible_physical_machines[model]['fixed_cost'],
                                  possible_physical_machines[model]['daily_cost'])
             # 记录已有的物理机
-            self.running_physical_machines[t].append(pm)
+            self.running_physical_machines.append(pm)
             # 计算固定成本
             self.cost += pm.fixed_cost
 
@@ -213,8 +210,8 @@ class Monitor:
         """
 
         # 找到虚拟机节点所在的物理机
-        day, i = self.virtual_physical_mapping[idx]
-        pm = self.running_physical_machines[day][i]
+        i = self.virtual_physical_mapping[idx]
+        pm = self.running_physical_machines[i]
         # 删除虚拟机节点
         pm.del_virtual_machines(idx)
         # 删除记录
@@ -275,12 +272,12 @@ class Monitor:
         """
 
         for day in range(t):
-            mask = [False] * len(self.running_physical_machines[day])
+            mask = [False] * len(self.running_physical_machines)
 
-            for i, pm in enumerate(self.running_physical_machines[day]):
+            for i, pm in enumerate(self.running_physical_machines):
                 mask[i] = (len(pm.running_virtual_machiness) > 0)
 
-            self.running_physical_machines[day] = np.array(self.running_physical_machines[day])[mask].tolist()
+            self.running_physical_machines = np.array(self.running_physical_machines)[mask].tolist()
 
     def calculate_cost_daily(self, t):
         """
@@ -294,17 +291,16 @@ class Monitor:
         num_running_physical_machines = 0
         total_free_resource = []
 
-        for day in range(t):
-            num_running_physical_machines += len(self.running_physical_machines[day])
-            for pm in self.running_physical_machines[day]:
+        num_running_physical_machines += len(self.running_physical_machines)
+        for pm in self.running_physical_machines:
+            if len(pm.get_virtual_machines()) > 0:
                 self.cost += pm.daily_cost
 
-                if t == 799: total_free_resource.append(pm.get_free_resources())
+            if t == 799:
+                total_free_resource.append(pm.get_free_resources())
 
         if t == 799:
             total_free_resource = np.array(total_free_resource)
-            # print(total_free_resource.shape)
-
             total_free_resource = total_free_resource.sum(axis=0)
             debug(total_free_resource)
 
