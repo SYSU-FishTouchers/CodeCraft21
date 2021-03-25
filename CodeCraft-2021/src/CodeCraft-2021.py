@@ -109,7 +109,7 @@ class Monitor:
                     # 记录虚拟机节点所在的物理机的id
                     self.virtual_physical_mapping[idx] = (day, i)
                     # 记录部署结果
-                    self.commands.append("".join([f"({i}", f", {result})" if result == "AB" else ")"]))
+                    self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
                     break
             if done: break
 
@@ -140,7 +140,7 @@ class Monitor:
                 # 记录虚拟机节点所在的物理机的id
                 self.virtual_physical_mapping[idx] = (t, i)
                 # 记录部署结果
-                self.commands.append("".join([f"({i}", f", {result})" if result == "AB" else ")"]))
+                self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
 
         return done
 
