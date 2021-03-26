@@ -77,29 +77,19 @@ class Monitor:
         # 每天的分配候选机器
         self.candidates = []
 
-        self.best_pm = list(possible_physical_machines.keys())[0]
+        # 按策略排序后认为是最优的物理机
+        self.best_physical_machine = list(possible_physical_machines.keys())[0]
 
-    def worker(self, vm, idx, start, end, step):
-        mask = np.arange(start, end, step)
-        if mask.size <= 0:
-            return
+        # 总天数
+        self.T = T
 
-        running_physical_machines = np.array(self.running_physical_machines)[mask]
-
-        suggestions = []
-        for i, pms in enumerate(running_physical_machines):
-            for j, pm in enumerate(pms):
-                if pm.try_add_virtual_machines(vm, idx) != '':
-                    suggestions.append({'day': mask[i], 'index': j, 'daily_cost': pm.daily_cost})
-
-    def try_add_virtual_machine(self, model: str, idx, t: int = 0):
+    def try_add_virtual_machine(self, model: str, idx):
         """
         来自用户的请求，新增虚拟机
         ======================
 
         :param model: 虚拟机型号
         :param idx: 虚拟机节点的id
-        :param t: 天数
         :return:
         """
 
@@ -118,16 +108,6 @@ class Monitor:
                             possible_virtual_machines[model]['ram'],
                             possible_virtual_machines[model]['double_type'])
 
-        # pool = Pool()
-        # batch_size = (t + 1) // 4
-        # self.running_physical_machines = np.array(self.running_physical_machines)
-        #
-        # num_proc = 4
-        #
-        # for i in range(num_proc):
-        #     mask = np.arange(i, t + 1, num_proc)
-        #     pms = self.running_physical_machines[mask]
-
         for i, pm in enumerate(self.running_physical_machines):
             result = pm.try_add_virtual_machines(vm, idx)
             done = (result != '')
@@ -137,8 +117,6 @@ class Monitor:
                 # 记录部署结果
                 self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
                 break
-
-        # self.running_physical_machines = self.running_physical_machines.tolist()
 
         """
         可以优化的点
@@ -157,7 +135,7 @@ class Monitor:
 
             目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
             """
-            self.record_daily_demands(self.best_pm, Q=1)
+            self.record_daily_demands(self.best_physical_machine, Q=1)
 
             result = self.running_physical_machines[-1].try_add_virtual_machines(vm, idx)
             done = (result != '')
@@ -291,18 +269,21 @@ class Monitor:
         num_running_physical_machines = 0
         total_free_resource = []
 
+        last_day = (t == self.T - 1)
+
         num_running_physical_machines += len(self.running_physical_machines)
         for pm in self.running_physical_machines:
             if len(pm.get_virtual_machines()) > 0:
                 self.cost += pm.daily_cost
 
-            if t == 799:
+            if last_day:
                 total_free_resource.append(pm.get_free_resources())
 
-        if t == 799:
+        if last_day:
             total_free_resource = np.array(total_free_resource)
             total_free_resource = total_free_resource.sum(axis=0)
-            debug(total_free_resource)
+            debug(f"Numa A:  {total_free_resource[0][0]} C  |  {total_free_resource[0][1]} G")
+            debug(f"Numa B:  {total_free_resource[1][0]} C  |  {total_free_resource[1][1]} G")
 
         debug()
         debug(f'{t:>4d}-th day\'s cost = {self.cost}')
@@ -350,13 +331,23 @@ def process(dataset: Dataset):
         model, cpu, ram, fixed_cost, daily_cost = line.split(',')
         possible_physical_machines[model] = {'cpu': int(cpu),
                                              'ram': int(ram),
-                                             'fixed_cost': float(fixed_cost),
-                                             'daily_cost': float(daily_cost)}
-        # PhysicalMachine(model, int(cpu), int(ram), float(fixed_cost), float(daily_cost))
+                                             'fixed_cost': int(fixed_cost),
+                                             'daily_cost': int(daily_cost)}
+        # PhysicalMachine(model, int(cpu), int(ram), int(fixed_cost), int(daily_cost))
         # ==> end of N
 
     # # 以 cpu - ram 作为关键特征1，以 cpu+ram 的单价为关键特征2，升序
     # # 得出性能最均衡的、性价比最高的服务器
+    # ===================================================
+    # [Debug] Numa A:  138472 C  |  43340 G
+    # [Debug] Numa B:  200882 C  |  109420 G
+    #
+    # [Debug]  799-th day's cost = 863342535
+    # [Debug]          Time cost = 27.924s
+    # [Debug]   Running machines : pm = 5511   vm = 24427
+    #
+    # [Debug] cost time: 27.923732042312622
+    # ===================================================
     # possible_physical_machines = dict(
     #     sorted(possible_physical_machines.items(),
     #            key=lambda x: (abs(x[1]['cpu'] - x[1]['ram']),
@@ -366,6 +357,16 @@ def process(dataset: Dataset):
 
     # 以 cpu - ram 作为关键特征1，以 cpu+ram 的单价为关键特征2，升序
     # 得出性能最均衡的、配置最高的服务器
+    # ===================================================
+    # [Debug] Numa A:  123684 C  |  27778 G
+    # [Debug] Numa B:  160769 C  |  78543 G
+    #
+    # [Debug]  799-th day's cost = 887547748
+    # [Debug]          Time cost = 14.496s
+    # [Debug]   Running machines : pm = 2281   vm = 24427
+    #
+    # [Debug] cost time: 14.49584412574768
+    # ===================================================
     possible_physical_machines = dict(
         sorted(possible_physical_machines.items(),
                key=lambda x: (abs(x[1]['cpu'] - x[1]['ram']),
@@ -373,7 +374,18 @@ def process(dataset: Dataset):
                reverse=False)
     )
 
-    # possible_physical_machines = dict(sorted(possible_physical_machines.items(), key=lambda x: x[1]['cpu'] + 2 * x[1]['ram'], reverse=True))
+    # 配置最高 （CPU + RAM） 最大的服务器
+    # ===================================================
+    # [Debug] Numa A:  342055 C  |  27855 G
+    # [Debug] Numa B:  349660 C  |  72062 G
+    #
+    # [Debug]  799-th day's cost = 1026732026
+    # [Debug]          Time cost = 14.845s
+    # [Debug]   Running machines : pm = 2256   vm = 24427
+    #
+    # [Debug] cost time: 14.844807147979736
+    # ===================================================
+    # possible_physical_machines = dict(sorted(possible_physical_machines.items(), key=lambda x: x[1]['cpu'] + x[1]['ram'], reverse=True))
 
     debug()
     debug(f'Possible Physical Machines')
@@ -447,7 +459,7 @@ def process(dataset: Dataset):
 
             if len(info) >= 3 and info[0] == 'add':
                 model, idx = info[1:]
-                monitor.try_add_virtual_machine(model, idx, t)
+                monitor.try_add_virtual_machine(model, idx)
             elif len(info) >= 2 and info[0] == 'del':
                 idx = info[-1]
                 monitor.del_virtual_machine(idx)
