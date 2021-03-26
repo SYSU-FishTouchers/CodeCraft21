@@ -358,6 +358,8 @@ def process(dataset: Dataset):
     # 以 cpu - ram 作为关键特征1，以 cpu+ram 的单价为关键特征2，升序
     # 得出性能最均衡的、配置最高的服务器
     # ===================================================
+    # 优先放入A（不管剩余空间大小）
+    #
     # [Debug] Numa A:  123684 C  |  27778 G
     # [Debug] Numa B:  160769 C  |  78543 G
     #
@@ -366,6 +368,28 @@ def process(dataset: Dataset):
     # [Debug]   Running machines : pm = 2281   vm = 24427
     #
     # [Debug] cost time: 14.49584412574768
+    # ===================================================
+    # 加入 Numa A 和 Numa B 切换的机制 (优先放入大的）
+    #
+    # [Debug] Numa A:  52383 C  |  27021 G
+    # [Debug] Numa B:  20987 C  |  37892 G
+    #
+    # [Debug]  799-th day's cost = 1265328689
+    # [Debug]          Time cost = 29.803s
+    # [Debug]   Running machines : pm = 3372   vm = 24427
+    #
+    # [Debug] cost time: 29.803368091583252
+    # ===================================================
+    # 加入 Numa A 和 Numa B 切换的机制 (优先放入小的）
+    #
+    # [Debug] Numa A:  114123 C  |  34340 G
+    # [Debug] Numa B:  297294 C  |  55824 G
+    #
+    # [Debug]  799-th day's cost = 943866101
+    # [Debug]          Time cost = 19.243s
+    # [Debug]   Running machines : pm = 2450   vm = 24427
+    #
+    # [Debug] cost time: 19.242738962173462
     # ===================================================
     possible_physical_machines = dict(
         sorted(possible_physical_machines.items(),
