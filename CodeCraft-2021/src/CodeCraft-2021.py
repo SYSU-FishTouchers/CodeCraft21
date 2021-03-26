@@ -26,15 +26,17 @@ def debug(info: object = '', linesep: str = os.linesep) -> None:
     if isinstance(info, str):
         # 对非空输出行加前缀
         line = ''.join(['[Debug] ' if info != '' else '', info, linesep])
-
         sys.stderr.write(line)
         sys.stderr.flush()
-
     elif isinstance(info, dict):
         for k, v in info.items():
             line = ''.join(['[Debug] ', f'{k}: {v}', linesep])
             sys.stderr.write(line)
             sys.stderr.flush()
+    else:
+        line = ''.join([f'[Debug] {info}', linesep])
+        sys.stderr.write(line)
+        sys.stderr.flush()
 
 
 def react(info: str, linesep=os.linesep):
@@ -55,7 +57,7 @@ def react(info: str, linesep=os.linesep):
 
 
 class Monitor:
-    def __init__(self, T):
+    def __init__(self, T, possible_physical_machines, possible_virtual_machines):
         # 记录所有正在运行的物理机
         self.running_physical_machines = []
 
@@ -80,6 +82,12 @@ class Monitor:
         # 总天数
         self.T = T
 
+        # 需要购买的物理机的配置偏好
+        self.ratio = 1
+
+        self.possible_physical_machines = possible_physical_machines
+        self.possible_virtual_machines = possible_virtual_machines
+
     @staticmethod
     def consumption(pm: PhysicalMachine):
         free_resources = np.array(pm.get_free_resources())
@@ -87,10 +95,17 @@ class Monitor:
         used = 1 - (free_resources * p)
         return used
 
-    def best_physical_machine(self):
-        return list(possible_physical_machines.keys())[0]
+    def update_ratio(self, ratio):
+        self.ratio = ratio
 
-    def try_add_virtual_machine(self, model: str, idx):
+        # 以 cpu / ram 的分布的标准差排序，离 一天中的平均 ration 越近的，排得越前
+        self.possible_physical_machines = dict(
+            sorted(self.possible_physical_machines.items(),
+                   key=lambda x: (abs(x[1]['cpu'] / x[1]['ram'] - self.ratio)),
+                   reverse=False)
+        )
+
+    def try_add_virtual_machine(self, model: str, idx, R):
         """
         来自用户的请求，新增虚拟机
         ======================
@@ -111,9 +126,9 @@ class Monitor:
         最好能以天为单位求最优解
         """
         vm = VirtualMachine(model,
-                            possible_virtual_machines[model]['cpu'],
-                            possible_virtual_machines[model]['ram'],
-                            possible_virtual_machines[model]['double_type'])
+                            self.possible_virtual_machines[model]['cpu'],
+                            self.possible_virtual_machines[model]['ram'],
+                            self.possible_virtual_machines[model]['double_type'])
 
         for i, pm in enumerate(self.running_physical_machines):
             result = pm.try_add_virtual_machines(vm, idx)
@@ -133,7 +148,7 @@ class Monitor:
         """
         if not done:
             # 确定有物理机可以买，且已买的物理机数量不超过10^5
-            if not len(possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
+            if not len(self.possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
                 return done
 
             """
@@ -142,7 +157,18 @@ class Monitor:
 
             目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
             """
-            self.record_daily_demands(self.best_physical_machine(), Q=1)
+
+            # 以 ram 为依据，ram大的在前面，取最高性能的机器
+            temp = dict(
+                sorted(dict(list(self.possible_physical_machines.items())[:8]).items(),
+                       key=lambda x: x[1]['ram'],
+                       reverse=True)
+            )
+
+            for model, info in temp.items():
+                if vm.cpu // 2 <= info['cpu'] and vm.ram // 2 <= info['ram']:
+                    self.record_daily_demands(model, Q=1)
+                    break
 
             result = self.running_physical_machines[-1].try_add_virtual_machines(vm, idx)
             done = (result != '')
@@ -154,7 +180,8 @@ class Monitor:
                 # 记录部署结果
                 self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
 
-        return done
+        # 设定一定得完成
+        assert done
 
     def record_daily_demands(self, model: str, Q: int = 1):
         """
@@ -165,7 +192,7 @@ class Monitor:
         :param Q: 购买数量
         :return:
         """
-        assert model in possible_physical_machines.keys()
+        assert model in self.possible_physical_machines.keys()
 
         # 提出需要 Q 台 model 型号的物理机
         if model in self.demands.keys():
@@ -176,10 +203,10 @@ class Monitor:
         # 增加 Q 台物理机
         for q in range(Q):
             pm = PhysicalMachine(model,
-                                 possible_physical_machines[model]['cpu'],
-                                 possible_physical_machines[model]['ram'],
-                                 possible_physical_machines[model]['fixed_cost'],
-                                 possible_physical_machines[model]['daily_cost'])
+                                 self.possible_physical_machines[model]['cpu'],
+                                 self.possible_physical_machines[model]['ram'],
+                                 self.possible_physical_machines[model]['fixed_cost'],
+                                 self.possible_physical_machines[model]['daily_cost'])
             # 记录已有的物理机
             self.running_physical_machines.append(pm)
             # 计算固定成本
@@ -333,10 +360,9 @@ class Dataset:
 
 
 def process(dataset: Dataset):
-    global possible_physical_machines, possible_virtual_machines
-
     # 可以采购的服务器类型和数量
     # ======================
+    possible_physical_machines = {}
 
     # 第一行包含一个整数 N(1≤N≤100)，表示可以采购的服务器类型数量。
     N = int(dataset.pop())
@@ -411,12 +437,12 @@ def process(dataset: Dataset):
     #
     # [Debug] cost time: 19.242738962173462
     # ===================================================
-    possible_physical_machines = dict(
-        sorted(possible_physical_machines.items(),
-               key=lambda x: (abs(x[1]['cpu'] - x[1]['ram']),
-                              -1 * (x[1]['cpu'] + x[1]['ram'])),
-               reverse=False)
-    )
+    # possible_physical_machines = dict(
+    #     sorted(possible_physical_machines.items(),
+    #            key=lambda x: (abs(x[1]['cpu'] - x[1]['ram']),
+    #                           -1 * (x[1]['cpu'] + x[1]['ram'])),
+    #            reverse=False)
+    # )
 
     # 配置最高 （CPU + RAM） 最大的服务器
     # ===================================================
@@ -438,6 +464,8 @@ def process(dataset: Dataset):
 
     # 可供售卖的虚拟机类型和数量
     # ======================
+
+    possible_virtual_machines = {}
 
     # 接下来一行包含一个整数 M(1≤M≤1000)，表示售卖的虚拟机类型数量。
     M = int(dataset.pop())
@@ -469,7 +497,7 @@ def process(dataset: Dataset):
     # 接下来一行包含一个整数 T(1≤T≤1000)，表示题目共会给出 T 天的用户请求序列数据。
     T = int(dataset.pop())
 
-    monitor = Monitor(T)
+    monitor = Monitor(T, possible_physical_machines, possible_virtual_machines)
 
     debug()
     debug(f'Daily operations')
@@ -483,6 +511,10 @@ def process(dataset: Dataset):
         """
 
         # monitor.migrate(t)
+
+        requests = []
+
+        demand_usage = {'cpu': 0, 'ram': 0}
 
         # 对于每一天的数据，第一行包含一个非负整数 R 表示当天共有 R 条请求。
         R = int(dataset.pop())
@@ -501,15 +533,22 @@ def process(dataset: Dataset):
 
             info = line.split(',')
 
+            requests.append(info)
+
             if len(info) >= 3 and info[0] == 'add':
                 model, idx = info[1:]
-                monitor.try_add_virtual_machine(model, idx)
-            elif len(info) >= 2 and info[0] == 'del':
-                idx = info[-1]
-                monitor.del_virtual_machine(idx)
-            else:
-                pass
+                demand_usage['cpu'] += possible_virtual_machines[model]['cpu']
+                demand_usage['ram'] += possible_virtual_machines[model]['ram']
             # ==> end of the r-th request
+
+        monitor.update_ratio(demand_usage['cpu'] / demand_usage['ram'])
+
+        # 回放
+        for r in requests:
+            if len(r) >= 3 and r[0] == 'add':
+                monitor.try_add_virtual_machine(r[1], r[2], R)
+            elif len(r) >= 2 and r[0] == 'del':
+                monitor.del_virtual_machine(r[1])
 
         """
         2. 扩容物理机
@@ -585,10 +624,5 @@ if __name__ == "__main__":
     except (ValueError, TypeError):
         debug(f'Cannot convert the Index of Datasets(=\'{args.dataset}\') from string to int, use None instead.')
         args.dataset = None
-
-    # 可供扩容的物理机
-    possible_physical_machines = {}
-    # 可供请求的虚拟机
-    possible_virtual_machines = {}
 
     main()
