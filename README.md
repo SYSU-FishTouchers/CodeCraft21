@@ -11,6 +11,8 @@
 | base2 | 03-24 11:25 | [代码整理，无功能变更](../../commit/ee6810bcd6cbe12905812b5bcfdbaf9df475cba4) |
 | base | 03-24 10:17 | 基本完成python版本的框架搭建，输入输出格式暂无发现的异常，提交发现超时 |
 
+> pypy: 如果没有运行环境，先 `source ./environment.sh` ，在 Linux 和 MacOS 上自动配置环境。
+
 ## 特殊用法
 
 通过修改 `build_and_run.sh` 脚本和加入 `argsparser` 库，实现了本地脚本运行时附加调试参数且不影响正常提交结果的功能。具体如下：

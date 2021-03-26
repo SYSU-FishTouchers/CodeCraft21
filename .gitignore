@@ -2,3 +2,6 @@
 .vscode
 .DS_Store
 **/*.zip
+
+pypy3/
+pypy3.tar.bz2

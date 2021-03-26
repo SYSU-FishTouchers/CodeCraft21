@@ -33,7 +33,11 @@ if [ "$(whereis pypy | wc -l)" -eq 0 ]; then
         export PATH="$(pwd)/pypy3/bin:$PATH"
     fi
 
+    echo "==> Installing 3rd-party libraries ..."
+    pypy -m ensurepip
+    pypy -m pip install numpy
+
 fi
 
-echo "Done"
+echo "==> Done"
 
