@@ -7,8 +7,8 @@ cd "$BASEDIR" || exit
 cd CodeCraft-2021 || exit
 
 PY="python"
-if [ "$(whereis pypy3 | wc -l)" -ne 0 ]; then
-    PY="pypy3"
+if [ "$(whereis pypy | wc -l)" -ne 0 ]; then
+    PY="pypy"
 fi
 
 if [ -n "$1" ]; then
