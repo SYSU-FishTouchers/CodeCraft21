@@ -77,11 +77,18 @@ class Monitor:
         # 每天的分配候选机器
         self.candidates = []
 
-        # 按策略排序后认为是最优的物理机
-        self.best_physical_machine = list(possible_physical_machines.keys())[0]
-
         # 总天数
         self.T = T
+
+    @staticmethod
+    def consumption(pm: PhysicalMachine):
+        free_resources = np.array(pm.get_free_resources())
+        p = 1 / np.array(pm.A.volume())
+        used = 1 - (free_resources * p)
+        return used
+
+    def best_physical_machine(self):
+        return list(possible_physical_machines.keys())[0]
 
     def try_add_virtual_machine(self, model: str, idx):
         """
@@ -135,7 +142,7 @@ class Monitor:
 
             目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
             """
-            self.record_daily_demands(self.best_physical_machine, Q=1)
+            self.record_daily_demands(self.best_physical_machine(), Q=1)
 
             result = self.running_physical_machines[-1].try_add_virtual_machines(vm, idx)
             done = (result != '')
@@ -197,6 +204,21 @@ class Monitor:
 
         return True
 
+    def migrate(self, t):
+        # limit = len(self.virtual_physical_mapping) * 5 // 1000
+        # pms = list(sorted(self.running_physical_machines,
+        #                   key=lambda x: np.array(x.get_free_resources()).sum(),
+        #                   reverse=False))
+        #
+        # debug(f"{t:>3}-th day's storage information")
+        # [info(pm) for i, pm in enumerate(pms) if i >= 0]
+        # if limit < 1 or len(pms) < 1:
+        #     debug("No vm can be migrated today")
+        # debug()
+        #
+        # if t > 10: exit(0)
+        pass
+
     def purchase_physical_machines_daily(self):
         """
         每日扩容
@@ -210,7 +232,7 @@ class Monitor:
             react(f'({model}, {Q})')
         self.demands.clear()
 
-    def migration_physical_machine_daily(self):
+    def migrate_virtual_machines_daily(self):
         """
         虚拟机迁移，核心算法
         =================
@@ -267,7 +289,7 @@ class Monitor:
         """
 
         num_running_physical_machines = 0
-        total_free_resource = []
+        consumptions = []
 
         last_day = (t == self.T - 1)
 
@@ -275,20 +297,18 @@ class Monitor:
         for pm in self.running_physical_machines:
             if len(pm.get_virtual_machines()) > 0:
                 self.cost += pm.daily_cost
-
-            if last_day:
-                total_free_resource.append(pm.get_free_resources())
-
-        if last_day:
-            total_free_resource = np.array(total_free_resource)
-            total_free_resource = total_free_resource.sum(axis=0)
-            debug(f"Numa A:  {total_free_resource[0][0]} C  |  {total_free_resource[0][1]} G")
-            debug(f"Numa B:  {total_free_resource[1][0]} C  |  {total_free_resource[1][1]} G")
+                if last_day:
+                    consumptions.append(self.consumption(pm))
 
         debug()
-        debug(f'{t:>4d}-th day\'s cost = {self.cost}')
+        debug(f'{t:>4d}-th day\'s cost = {self.cost:,}')
         debug(f'         Time cost = {time.time() - self.start_time:.3f}s')
         debug(f'  Running machines : pm = {num_running_physical_machines} \t vm = {len(self.virtual_physical_mapping)}')
+        if last_day:
+            consumptions = np.array(consumptions)
+            consumptions = consumptions.mean(axis=0)
+            debug(f"       Consumption : CPU-A {consumptions[0][0]:<5.1%} | RAM-A {consumptions[0][1]:<5.1%}")
+            debug(f"                     CPU-B {consumptions[1][0]:<5.1%} | RAM-B {consumptions[1][1]:<5.1%}")
         debug()
 
 
@@ -462,7 +482,7 @@ def process(dataset: Dataset):
         1. 记录需求
         """
 
-        # if t % 200 == 1: gc.collect()
+        # monitor.migrate(t)
 
         # 对于每一天的数据，第一行包含一个非负整数 R 表示当天共有 R 条请求。
         R = int(dataset.pop())
@@ -506,7 +526,7 @@ def process(dataset: Dataset):
         # 迁移的目的服务器和节点必须有足够的资源容纳所迁移的虚拟机。
         # 迁移的虚拟机总量不超过当前存量虚拟机数量的千分之五。
         # 即假设当前有 n 台存量虚拟机，每天你可以迁移的虚拟机总量不得超过 5n/1000 向下取整。
-        monitor.migration_physical_machine_daily()
+        monitor.migrate_virtual_machines_daily()
 
         """
         4. 部署虚拟机节点
@@ -514,10 +534,6 @@ def process(dataset: Dataset):
 
         # 执行1阶段中做过以便的部署任务
         monitor.deploy_virtual_machines_daily()
-
-        """
-        5. 空闲物理机的关闭
-        """
 
         # 裁判程序会将当前有负载(至少部署了一台虚拟机)的服务器视为开机状态，没有任何负载的服务器视为关机状态
         # monitor.power_off_physical_machines_daily()
@@ -530,7 +546,9 @@ def process(dataset: Dataset):
         # 总成本包含两部分：购买服务器的整体硬件成本以及服务器消耗的整体能耗成本。
         # 整体硬件成本即将选手输出的方案中所有购买的服务器的硬件成本相加。
         # 整体能耗成本的计算方式为：在处理完每一天的所有操作后(包括迁移，创建和删除)
-        monitor.calculate_cost_daily(t)
+
+        # 只有测试算法的时候才运行这一步
+        if args.verbose: monitor.calculate_cost_daily(t)
 
         # ==> end of the t-th day
     debug(f'cost time: {time.time() - monitor.start_time}')

@@ -42,6 +42,9 @@ class Numa:
     def free(self):
         return self.cpu.free, self.ram.free
 
+    def volume(self):
+        return self.cpu.volume, self.ram.volume
+
     def try_allocate(self, cpu, ram):
         if self.cpu.free >= cpu and self.ram.free >= ram:
             # 分配后，空余容量要减少
