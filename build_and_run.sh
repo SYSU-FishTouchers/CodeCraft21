@@ -7,10 +7,13 @@ cd "$BASEDIR" || exit
 cd CodeCraft-2021 || exit
 
 PY="python"
-if [ "$(whereis pypy | wc -l)" -ne 0 ]; then
+
+# if pypy is exist
+if command -v pypy > /dev/null 2>&1; then
     PY="pypy"
 fi
 
+# parsing parameters
 if [ -n "$1" ]; then
     if [ -n "$2" ]; then
       $PY src/CodeCraft-2021.py "$1" "$2"
