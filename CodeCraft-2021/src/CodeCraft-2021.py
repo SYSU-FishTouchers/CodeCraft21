@@ -8,6 +8,7 @@ import time
 import argparse
 
 from machines import VirtualMachine, PhysicalMachine
+from misc import PlaneModel
 
 
 def debug(info: object = '', linesep: str = os.linesep, header: str = '[Debug] ') -> None:
@@ -86,7 +87,8 @@ class Monitor:
         # 需要购买的物理机的配置偏好
         self.ratio = 1
 
-        self.possible_physical_machines = possible_physical_machines
+        self.possible_physical_machines = {}
+        self.select_possible_physical_machines(possible_physical_machines)
         self.possible_virtual_machines = possible_virtual_machines
 
     @staticmethod
@@ -111,6 +113,21 @@ class Monitor:
         debug(f'ABs = {ABs};', header='    ')
         exit(0)
 
+    def select_possible_physical_machines(self, possible_physical_machines: dict):
+        cpus, rams, fixed_costs, daily_costs = [], [], [], []
+        for info in possible_physical_machines.values():
+            cpus.append(info["cpu"])
+            rams.append(info["ram"])
+            fixed_costs.append(info["fixed_cost"])
+            daily_costs.append(info["daily_cost"])
+
+        plane = PlaneModel(cpus, rams, fixed_costs)
+
+        for model, info in possible_physical_machines.items():
+            delta = float(info["fixed_cost"]) - plane.predict(info["cpu"], info["ram"])
+            if delta <= 0:
+                self.possible_physical_machines[model] = info
+
     def update_ratio(self, ratio):
         self.ratio = ratio
 
@@ -121,7 +138,7 @@ class Monitor:
                    reverse=False)
         )
 
-    def try_add_virtual_machine(self, model: str, idx, R):
+    def try_add_virtual_machine(self, model: str, idx):
         """
         来自用户的请求，新增虚拟机
         ======================
@@ -174,15 +191,19 @@ class Monitor:
             目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
             """
 
-            # 以 ram 为依据，ram大的在前面，取最高性能的机器
+            # 取性价比最高的机器
+            limit = max(int(0.1 * len(self.possible_physical_machines)), 1)
             temp = dict(
-                sorted(dict(list(self.possible_physical_machines.items())[:8]).items(),
+                sorted(dict(list(self.possible_physical_machines.items())[:limit]).items(),
                        key=lambda x: x[1]['ram'],
-                       reverse=True)
+                       reverse=False)
             )
 
             for model, info in temp.items():
-                if vm.cpu // 2 <= info['cpu'] and vm.ram // 2 <= info['ram']:
+                pm_cpu, pm_ram = info['cpu'] // 2, info['ram'] // 2
+
+                if int(vm.cpu) // (1 + int(vm.double_type)) <= pm_cpu and \
+                        int(vm.ram) // (1 + int(vm.double_type)) <= pm_ram:
                     self.record_daily_demands(model, Q=1)
                     break
 
@@ -392,13 +413,10 @@ def process(dataset: Dataset):
 
         model, cpu, ram, fixed_cost, daily_cost = line.split(',')
 
-        # 高于均价的机器不考虑
-        delta = float(fixed_cost) - (220.43902439 * float(cpu) + 104.365853659 * float(ram) - 9828.902439024)
-        if delta <= 0:
-            possible_physical_machines[model] = {'cpu': int(cpu),
-                                                 'ram': int(ram),
-                                                 'fixed_cost': int(fixed_cost),
-                                                 'daily_cost': int(daily_cost)}
+        possible_physical_machines[model] = {'cpu': int(cpu),
+                                             'ram': int(ram),
+                                             'fixed_cost': int(fixed_cost),
+                                             'daily_cost': int(daily_cost)}
         # PhysicalMachine(model, int(cpu), int(ram), int(fixed_cost), int(daily_cost))
         # ==> end of N
 
@@ -577,7 +595,7 @@ def process(dataset: Dataset):
         # 回放
         for r in requests:
             if len(r) >= 3 and r[0] == 'add':
-                monitor.try_add_virtual_machine(r[1], r[2], R)
+                monitor.try_add_virtual_machine(r[1], r[2])
             elif len(r) >= 2 and r[0] == 'del':
                 monitor.del_virtual_machine(r[1])
 
