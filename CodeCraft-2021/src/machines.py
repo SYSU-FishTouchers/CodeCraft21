@@ -47,6 +47,11 @@ class Numa:
 
     def try_allocate(self, cpu, ram):
         if self.cpu.free >= cpu and self.ram.free >= ram:
+            return True
+        return False
+
+    def allocate(self, cpu, ram):
+        if self.cpu.free >= cpu and self.ram.free >= ram:
             # 分配后，空余容量要减少
             self.cpu.free -= cpu
             self.ram.free -= ram
@@ -57,9 +62,21 @@ class Numa:
         self.cpu.free += cpu
         self.ram.free += ram
 
+    def __gt__(self, other):
+        return (self.cpu.free > other.cpu.free) and (self.ram.free > other.ram.free)
+
+    def __ge__(self, other):
+        return (self.cpu.free >= other.cpu.free) and (self.ram.free >= other.ram.free)
+
+    def __lt__(self, other):
+        return (self.cpu.free < other.cpu.free) and (self.ram.free < other.ram.free)
+
+    def __le__(self, other):
+        return (self.cpu.free <= other.cpu.free) and (self.ram.free <= other.ram.free)
+
 
 class PhysicalMachine:
-    def __init__(self, model, cpu, ram, fixed_cost, daily_cost):
+    def __init__(self, model, cpu, ram, fixed_cost, daily_cost, idx):
         """
         单台物理机
 
@@ -68,10 +85,14 @@ class PhysicalMachine:
         :param ram: 内存 大小
         :param fixed_cost: 硬件成本
         :param daily_cost: 每日能耗成本
+        :param idx: 物理机id
         """
 
         # 物理机的类型
         self.model = model
+
+        # 物理机的序号
+        self.idx = idx
 
         # Numa 架构：目前主流的服务器都采用了非统一内存访问（Numa）架构，
         # 你可以理解为每台服务器内部都存在两个 Numa 节点：A 和 B（下文中提到的节点均指 Numa 节点）。
@@ -107,6 +128,8 @@ class PhysicalMachine:
             cpu, ram = vm.cpu // 2, vm.ram // 2
 
             if self.A.try_allocate(cpu, ram) and self.B.try_allocate(cpu, ram):
+                self.A.allocate(cpu, ram)
+                self.B.allocate(cpu, ram)
                 self.running_virtual_machines[idx] = (vm, 'AB')
                 return 'AB'
 
@@ -174,10 +197,27 @@ class PhysicalMachine:
             # if (self.A.free()[0] < self.B.free()[0]) and self.A.free()[1] < self.B.free()[1]:
             #     self.A, self.B = self.B, self.A
 
-            if self.A.try_allocate(cpu, ram):
+            if self.A.try_allocate(cpu, ram) and self.B.try_allocate(cpu, ram):
+                # 其中一个 Numa 剩余空间大
+                if self.A < self.B:
+                    self.A, self.B = self.B, self.A
+                    self.A.allocate(cpu, ram)
+                    self.running_virtual_machines[idx] = (vm, self.A.name)
+                    return self.A.name
+
+                # 两个 Numa 的 cpu 和 ram 各有大小
+                elif not self.A < self.B and not self.A > self.B:
+                    self.B.allocate(cpu, ram)
+                    self.running_virtual_machines[idx] = (vm, self.B.name)
+                    return self.B.name
+
+            elif self.A.try_allocate(cpu, ram):
+                self.A.allocate(cpu, ram)
                 self.running_virtual_machines[idx] = (vm, self.A.name)
                 return self.A.name
+
             elif self.B.try_allocate(cpu, ram):
+                self.B.allocate(cpu, ram)
                 self.running_virtual_machines[idx] = (vm, self.B.name)
                 return self.B.name
 

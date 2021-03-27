@@ -6,6 +6,7 @@
 
 | Tags | 时间点 | 完成情况 |
 | :---: | :---: | :---: |
+| final | 03-27 19:55 | 最后参考别人的开源，发现最关键的是[第171行](CodeCraft-2021/src/CodeCraft-2021.py#L171)和[第300行](CodeCraft-2021/src/CodeCraft-2021.py#L300)的random，本地案例效果显著提升 |
 | onboarded | 03-26 03:30 | [总成本：2103007242，运行时间：26.12，pypy](../../commit/4433923c15380f0ba23c707753490f6fbe38dbe4)|
 | base3 | 03-25 17:38 | [避免长列表append，提升效率](../../commit/59b3baebc4c3809a8d2ed237596980894cbdea0b) |
 | base2 | 03-24 11:25 | [代码整理，无功能变更](../../commit/ee6810bcd6cbe12905812b5bcfdbaf9df475cba4) |

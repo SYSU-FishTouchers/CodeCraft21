@@ -6,7 +6,6 @@ import re
 from glob import glob
 import time
 import argparse
-from copy import deepcopy
 
 from machines import VirtualMachine, PhysicalMachine
 from misc import PlaneModel
@@ -103,6 +102,15 @@ class Monitor:
         # 主要格式为 {idx: 部署命令}
         self.deploy_notebook = {}
 
+        # 记录前一天被删除了vm的物理机id
+        self.major_migration = []
+
+        # 记录迁移记录
+        self.migrate_notebook = []
+
+        # 总迁移次数
+        self.num_migration = 0
+
     @staticmethod
     def consumption(pm: PhysicalMachine):
         free_resources = np.array(pm.get_free_resources())
@@ -151,29 +159,16 @@ class Monitor:
         )
 
     def best_physical_machine(self, vm):
-        # 取性价比最高的机器
-        limit = max(int(0.1 * len(self.possible_physical_machines)), 1)
-        temp = dict(
-            sorted(dict(list(self.possible_physical_machines.items())[:limit]).items(),
-                   key=lambda x: x[1]['ram'],
-                   reverse=True)
-        )
 
         # 如果是双节点的vm则资源只按一个numa进行评估
         vm_cpu = vm.cpu // (1 + int(vm.double_type))
         vm_ram = vm.ram // (1 + int(vm.double_type))
 
-        for model, info in temp.items():
-            pm_cpu, pm_ram = info['cpu'] // 2, info['ram'] // 2
-
-            if vm_cpu <= pm_cpu and vm_ram <= pm_ram:
-                return model
-
-        # 无法按理想推荐机器，则直接从池子里找，能用就行
+        # 直接从池子里找，能用就行
         for model, info in self.possible_physical_machines.items():
             pm_cpu, pm_ram = info['cpu'] // 2, info['ram'] // 2
 
-            if vm_cpu <= pm_cpu and vm_ram <= pm_ram:
+            if vm_cpu < pm_cpu and vm_ram < pm_ram and np.random.random() > 0.2:
                 return model
 
     def try_add_virtual_machine(self, model: str, idx):
@@ -201,14 +196,14 @@ class Monitor:
                             self.possible_virtual_machines[model]['ram'],
                             self.possible_virtual_machines[model]['double_type'])
 
-        for i, pm in enumerate(self.running_physical_machines):
+        for pm in self.running_physical_machines:
             result = pm.try_add_virtual_machines(vm, idx)
             done = (result != '')
             if done:
                 # 记录虚拟机节点所在的物理机的id
-                self.virtual_physical_mapping[idx] = i
+                self.virtual_physical_mapping[idx] = pm.idx
                 # 记录部署结果
-                self.deploy_notebook[idx] = "".join([f"({i}", f", {result})" if result != "AB" else ")"])
+                self.deploy_notebook[idx] = "".join([f"({pm.idx}", f", {result})" if result != "AB" else ")"])
                 break
 
         """
@@ -224,15 +219,14 @@ class Monitor:
 
             self.record_daily_demands(self.best_physical_machine(vm), Q=1)
 
-            result = self.running_physical_machines[-1].try_add_virtual_machines(vm, idx)
+            pm = self.running_physical_machines[-1]
+            result = pm.try_add_virtual_machines(vm, idx)
             done = (result != '')
             if done:
-                # 物理机id
-                i = len(self.running_physical_machines) - 1
                 # 记录虚拟机节点所在的物理机的id
-                self.virtual_physical_mapping[idx] = i
+                self.virtual_physical_mapping[idx] = pm.idx
                 # 记录部署结果
-                self.deploy_notebook[idx] = "".join([f"({i}", f", {result})" if result != "AB" else ")"])
+                self.deploy_notebook[idx] = "".join([f"({pm.idx}", f", {result})" if result != "AB" else ")"])
 
         # 设定一定得完成
         assert done
@@ -260,11 +254,15 @@ class Monitor:
                                  self.possible_physical_machines[model]['cpu'],
                                  self.possible_physical_machines[model]['ram'],
                                  self.possible_physical_machines[model]['fixed_cost'],
-                                 self.possible_physical_machines[model]['daily_cost'])
+                                 self.possible_physical_machines[model]['daily_cost'],
+                                 len(self.running_physical_machines))
             # 记录已有的物理机
             self.running_physical_machines.append(pm)
             # 计算固定成本
             self.cost += pm.fixed_cost
+            # 可能用于迁移
+            if pm.idx not in self.major_migration:
+                self.major_migration.append(pm.idx)
 
     def del_virtual_machine(self, idx):
         """
@@ -279,26 +277,46 @@ class Monitor:
         i = self.virtual_physical_mapping[idx]
         pm = self.running_physical_machines[i]
         # 删除虚拟机节点
-        pm.del_virtual_machines(idx)
+        assert pm.del_virtual_machines(idx)
+        # 记录这个节点被删除过数据
+        if i not in self.major_migration:
+            self.major_migration.append(i)
         # 删除记录
         self.virtual_physical_mapping.pop(idx)
 
         return True
 
     def migrate(self, t):
-        # limit = len(self.virtual_physical_mapping) * 5 // 1000
-        # pms = list(sorted(self.running_physical_machines,
-        #                   key=lambda x: np.array(x.get_free_resources()).sum(),
-        #                   reverse=False))
-        #
-        # debug(f"{t:>3}-th day's storage information")
-        # [info(pm) for i, pm in enumerate(pms) if i >= 0]
-        # if limit < 1 or len(pms) < 1:
-        #     debug("No vm can be migrated today")
-        # debug()
-        #
-        # if t > 10: exit(0)
-        pass
+        if len(self.running_physical_machines) < 1: return
+
+        limit = len(self.virtual_physical_mapping) // 200
+        avg_vm = len(self.virtual_physical_mapping) // len(self.running_physical_machines)
+
+        counter = 0
+        for pm in self.running_physical_machines:
+            if len(pm.running_virtual_machines) > min(limit, avg_vm):
+                continue
+
+            if np.random.random() < 0.2:
+                continue
+
+            migrated = []
+            for vid, vm in pm.running_virtual_machines.items():
+                for container in self.running_physical_machines:
+                    if pm == container:
+                        continue
+
+                    result = container.try_add_virtual_machines(vm[0], vid)
+                    done = (result != '')
+                    if done:
+                        self.migrate_notebook.append(f'({vid}, {container.idx}{f", {result}" if result != "AB" else ""})')
+                        migrated.append(vid)
+                        self.virtual_physical_mapping[vid] = container.idx
+                        counter += 1
+                        if counter >= limit: return
+                        break
+            for vid in migrated:
+                pm.del_virtual_machines(vid)
 
     def purchase_physical_machines_daily(self):
         """
@@ -325,10 +343,12 @@ class Monitor:
         :return:
         """
 
-        self.cost += 0
-
         # 不迁移机器（迁移 0 台机器）
-        react(f'(migration, 0)')
+        react(f'(migration, {len(self.migrate_notebook)})')
+        for cmd in self.migrate_notebook:
+            react(cmd)
+        self.num_migration += len(self.migrate_notebook)
+        self.migrate_notebook.clear()
 
     def deploy_virtual_machines_daily(self):
         """
@@ -393,6 +413,7 @@ class Monitor:
         debug(f'{t:>4d}-th day\'s cost = {self.cost:,}')
         debug(f'         Time cost = {time.time() - self.start_time:.3f}s')
         debug(f'  Running machines : pm = {num_running_physical_machines} \t vm = {len(self.virtual_physical_mapping)}')
+        debug(f'   Total migration : {self.num_migration}')
         if last_day:
             consumptions = np.array(consumptions)
             consumptions = consumptions.mean(axis=0)
