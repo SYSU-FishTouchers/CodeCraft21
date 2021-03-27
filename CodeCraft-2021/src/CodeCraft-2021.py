@@ -6,6 +6,7 @@ import re
 from glob import glob
 import time
 import argparse
+from copy import deepcopy
 
 from machines import VirtualMachine, PhysicalMachine
 from misc import PlaneModel
@@ -72,6 +73,9 @@ class Monitor:
         # 开始时间
         self.start_time = time.time()
 
+        # 原始的当天请求
+        self.requests = []
+
         # 扩容需求
         self.demands = {}
 
@@ -87,9 +91,17 @@ class Monitor:
         # 需要购买的物理机的配置偏好
         self.ratio = 1
 
+        # 可供购买的物理机型号
         self.possible_physical_machines = {}
         self.select_possible_physical_machines(possible_physical_machines)
+
+        # 销售的虚拟机型号
         self.possible_virtual_machines = possible_virtual_machines
+
+        # 购买机器时采用的策略是一边部署一边购买新机器，所以购置顺序和请求顺序有关
+        # 为了优先响应大请求，对连续的 add 做了排序，这个 dict 用于记录每个虚拟机请求的部署结果
+        # 主要格式为 {idx: 部署命令}
+        self.deploy_notebook = {}
 
     @staticmethod
     def consumption(pm: PhysicalMachine):
@@ -131,12 +143,38 @@ class Monitor:
     def update_ratio(self, ratio):
         self.ratio = ratio
 
-        # 以 cpu / ram 的分布的标准差排序，离 一天中的平均 ration 越近的，排得越前
+        # 以 cpu / ram 的分布的标准差排序，离 一天中的平均 ratio 越近的，排得越前
         self.possible_physical_machines = dict(
             sorted(self.possible_physical_machines.items(),
                    key=lambda x: (abs(x[1]['cpu'] / x[1]['ram'] - self.ratio)),
                    reverse=False)
         )
+
+    def best_physical_machine(self, vm):
+        # 取性价比最高的机器
+        limit = max(int(0.1 * len(self.possible_physical_machines)), 1)
+        temp = dict(
+            sorted(dict(list(self.possible_physical_machines.items())[:limit]).items(),
+                   key=lambda x: x[1]['ram'],
+                   reverse=True)
+        )
+
+        # 如果是双节点的vm则资源只按一个numa进行评估
+        vm_cpu = vm.cpu // (1 + int(vm.double_type))
+        vm_ram = vm.ram // (1 + int(vm.double_type))
+
+        for model, info in temp.items():
+            pm_cpu, pm_ram = info['cpu'] // 2, info['ram'] // 2
+
+            if vm_cpu <= pm_cpu and vm_ram <= pm_ram:
+                return model
+
+        # 无法按理想推荐机器，则直接从池子里找，能用就行
+        for model, info in self.possible_physical_machines.items():
+            pm_cpu, pm_ram = info['cpu'] // 2, info['ram'] // 2
+
+            if vm_cpu <= pm_cpu and vm_ram <= pm_ram:
+                return model
 
     def try_add_virtual_machine(self, model: str, idx):
         """
@@ -170,13 +208,13 @@ class Monitor:
                 # 记录虚拟机节点所在的物理机的id
                 self.virtual_physical_mapping[idx] = i
                 # 记录部署结果
-                self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
+                self.deploy_notebook[idx] = "".join([f"({i}", f", {result})" if result != "AB" else ")"])
                 break
 
         """
         可以优化的点
         ==========
-        
+
         如果还不能创建那就再买
         """
         if not done:
@@ -184,28 +222,7 @@ class Monitor:
             if not len(self.possible_physical_machines) > 0 or not (0 <= len(self.running_physical_machines) < 1e5):
                 return done
 
-            """
-            可以优化的点
-            ==========
-
-            目前是直接买容量最大的服务器（实际上可能有cpu大但ram小、cpu小但ram大的例子，买不到最优解）
-            """
-
-            # 取性价比最高的机器
-            limit = max(int(0.1 * len(self.possible_physical_machines)), 1)
-            temp = dict(
-                sorted(dict(list(self.possible_physical_machines.items())[:limit]).items(),
-                       key=lambda x: x[1]['ram'],
-                       reverse=False)
-            )
-
-            for model, info in temp.items():
-                pm_cpu, pm_ram = info['cpu'] // 2, info['ram'] // 2
-
-                if int(vm.cpu) // (1 + int(vm.double_type)) <= pm_cpu and \
-                        int(vm.ram) // (1 + int(vm.double_type)) <= pm_ram:
-                    self.record_daily_demands(model, Q=1)
-                    break
+            self.record_daily_demands(self.best_physical_machine(vm), Q=1)
 
             result = self.running_physical_machines[-1].try_add_virtual_machines(vm, idx)
             done = (result != '')
@@ -215,7 +232,7 @@ class Monitor:
                 # 记录虚拟机节点所在的物理机的id
                 self.virtual_physical_mapping[idx] = i
                 # 记录部署结果
-                self.commands.append("".join([f"({i}", f", {result})" if result != "AB" else ")"]))
+                self.deploy_notebook[idx] = "".join([f"({i}", f", {result})" if result != "AB" else ")"])
 
         # 设定一定得完成
         assert done
@@ -315,11 +332,19 @@ class Monitor:
 
     def deploy_virtual_machines_daily(self):
         """
-        每日节点部署
+        按原始请求顺序部署虚拟机
         ==========
 
         :return:
         """
+
+        # 统计部署命令
+        for r in self.requests:
+            idx = r[-1]
+            if r[0] == 'add':
+                self.commands.append(self.deploy_notebook[idx])
+        self.requests.clear()
+        self.deploy_notebook.clear()
 
         for cmd in self.commands:
             react(cmd)
@@ -412,7 +437,6 @@ def process(dataset: Dataset):
         line = re.sub('[ ()]', '', dataset.pop().strip())
 
         model, cpu, ram, fixed_cost, daily_cost = line.split(',')
-
         possible_physical_machines[model] = {'cpu': int(cpu),
                                              'ram': int(ram),
                                              'fixed_cost': int(fixed_cost),
@@ -550,6 +574,7 @@ def process(dataset: Dataset):
 
         # monitor.migrate(t)
 
+        # 对连续的 add请求 做排序，需要资源大的 add请求 放在前面
         requests = []
 
         demand_usage = {'cpu': 0, 'ram': 0}
@@ -575,6 +600,8 @@ def process(dataset: Dataset):
             info = line.split(',')
 
             requests.append(info)
+            # 记录原始的所有请求，每天定时初始化
+            monitor.requests.append(info)
 
             if info[0] == 'add':
                 model, idx = info[1:]
@@ -583,6 +610,7 @@ def process(dataset: Dataset):
             elif info[0] == 'del':
                 p2 = r
                 # 对上一批 add 请求进行排序，需求大的排在前面
+                # 这里是为了购买机器
                 requests[p1:p2] = list(sorted(requests[p1:p2],
                                               key=lambda x: (possible_virtual_machines[x[1]]['cpu'] +
                                                              possible_virtual_machines[x[1]]['ram']),
@@ -591,8 +619,9 @@ def process(dataset: Dataset):
             # ==> end of the r-th request
 
         monitor.update_ratio(demand_usage['cpu'] / demand_usage['ram'])
+        # if t == 1: monitor.statistic_to_matlab(requests)
 
-        # 回放
+        # 这里用优化请求进行购买
         for r in requests:
             if len(r) >= 3 and r[0] == 'add':
                 monitor.try_add_virtual_machine(r[1], r[2])
