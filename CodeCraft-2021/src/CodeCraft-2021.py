@@ -10,13 +10,14 @@ import argparse
 from machines import VirtualMachine, PhysicalMachine
 
 
-def debug(info: object = '', linesep: str = os.linesep) -> None:
+def debug(info: object = '', linesep: str = os.linesep, header: str = '[Debug] ') -> None:
     """
     调试信息
     ======
 
     :param info: 信息内容
     :param linesep: 断行符号
+    :param header: 行开头
     :return: 无
     """
 
@@ -25,16 +26,16 @@ def debug(info: object = '', linesep: str = os.linesep) -> None:
 
     if isinstance(info, str):
         # 对非空输出行加前缀
-        line = ''.join(['[Debug] ' if info != '' else '', info, linesep])
+        line = ''.join([header if info != '' else '', info, linesep])
         sys.stderr.write(line)
         sys.stderr.flush()
     elif isinstance(info, dict):
         for k, v in info.items():
-            line = ''.join(['[Debug] ', f'{k}: {v}', linesep])
+            line = ''.join([header, f'{k}: {v}', linesep])
             sys.stderr.write(line)
             sys.stderr.flush()
     else:
-        line = ''.join([f'[Debug] {info}', linesep])
+        line = ''.join([header, f'{info}', linesep])
         sys.stderr.write(line)
         sys.stderr.flush()
 
@@ -94,6 +95,21 @@ class Monitor:
         p = 1 / np.array(pm.A.volume())
         used = 1 - (free_resources * p)
         return used
+
+    def statistic_to_matlab(self, requests):
+        cpus, rams, ABs = [], [], []
+        for r in requests:
+            if r[0] == 'del': continue
+
+            info = self.possible_virtual_machines[r[1]]
+            cpus.append(info["cpu"])
+            rams.append(info["ram"])
+            ABs.append(int(info["double_type"]))
+
+        debug(f'cpus = {cpus};', header='    ')
+        debug(f'rams = {rams};', header='    ')
+        debug(f'ABs = {ABs};', header='    ')
+        exit(0)
 
     def update_ratio(self, ratio):
         self.ratio = ratio
@@ -375,10 +391,14 @@ def process(dataset: Dataset):
         line = re.sub('[ ()]', '', dataset.pop().strip())
 
         model, cpu, ram, fixed_cost, daily_cost = line.split(',')
-        possible_physical_machines[model] = {'cpu': int(cpu),
-                                             'ram': int(ram),
-                                             'fixed_cost': int(fixed_cost),
-                                             'daily_cost': int(daily_cost)}
+
+        # 高于均价的机器不考虑
+        delta = float(fixed_cost) - (220.43902439 * float(cpu) + 104.365853659 * float(ram) - 9828.902439024)
+        if delta <= 0:
+            possible_physical_machines[model] = {'cpu': int(cpu),
+                                                 'ram': int(ram),
+                                                 'fixed_cost': int(fixed_cost),
+                                                 'daily_cost': int(daily_cost)}
         # PhysicalMachine(model, int(cpu), int(ram), int(fixed_cost), int(daily_cost))
         # ==> end of N
 
