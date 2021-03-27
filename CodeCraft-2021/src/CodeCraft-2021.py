@@ -539,6 +539,9 @@ def process(dataset: Dataset):
         # 对于每一天的数据，第一行包含一个非负整数 R 表示当天共有 R 条请求。
         R = int(dataset.pop())
 
+        # 快慢指针
+        p1, p2 = 0, 0
+
         # 接下来 R 行，按顺序给出每一条请求数据。请求数据的格式为：
         #     (add, 虚拟机型号, 虚拟机 ID)    创建一台虚拟机
         #     (del, 虚拟机 ID)              删除一台虚拟机
@@ -555,10 +558,18 @@ def process(dataset: Dataset):
 
             requests.append(info)
 
-            if len(info) >= 3 and info[0] == 'add':
+            if info[0] == 'add':
                 model, idx = info[1:]
                 demand_usage['cpu'] += possible_virtual_machines[model]['cpu']
                 demand_usage['ram'] += possible_virtual_machines[model]['ram']
+            elif info[0] == 'del':
+                p2 = r
+                # 对上一批 add 请求进行排序，需求大的排在前面
+                requests[p1:p2] = list(sorted(requests[p1:p2],
+                                              key=lambda x: (possible_virtual_machines[x[1]]['cpu'] +
+                                                             possible_virtual_machines[x[1]]['ram']),
+                                              reverse=True))
+                p1 = r + 1
             # ==> end of the r-th request
 
         monitor.update_ratio(demand_usage['cpu'] / demand_usage['ram'])
